@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -6,12 +7,24 @@ import httpx
 
 log = logging.getLogger("backseat")
 
+def _env(name: str, default: str) -> str:
+    """Like os.environ.get, but treats an empty string as 'not set' too
+    (env_file entries like FOO= otherwise override real defaults with '')."""
+    value = os.environ.get(name)
+    return value if value else default
+
+
 GONKAGATE_API_KEY = os.environ["GONKAGATE_API_KEY"]
 # GonkaGate is assumed OpenAI-compatible. Override GONKAGATE_BASE_URL if the real endpoint differs.
-GONKAGATE_BASE_URL = os.environ.get("GONKAGATE_BASE_URL", "https://api.gonkagate.com/v1")
-MODEL_NAME = os.environ.get("MODEL_NAME", "deepseek-ai/deepseek-v4-flash-0731")
-MAX_TOKENS = int(os.environ.get("MAX_TOKENS", "200"))
-REQUEST_TIMEOUT = float(os.environ.get("REQUEST_TIMEOUT_SECONDS", "30"))
+GONKAGATE_BASE_URL = _env("GONKAGATE_BASE_URL", "https://api.gonkagate.com/v1")
+MODEL_NAME = _env("MODEL_NAME", "deepseek-ai/deepseek-v4-flash-0731")
+MAX_TOKENS = int(_env("MAX_TOKENS", "200"))
+REQUEST_TIMEOUT = float(_env("REQUEST_TIMEOUT_SECONDS", "30"))
+# GonkaGate enforces a concurrent-requests limit ("too many concurrent requests"),
+# separate from any per-minute rate limit. Keep this at or below your plan's limit.
+GONKAGATE_MAX_CONCURRENCY = int(_env("GONKAGATE_MAX_CONCURRENCY", "1"))
+
+_semaphore = asyncio.Semaphore(GONKAGATE_MAX_CONCURRENCY)
 
 _DECISION_SYSTEM_PROMPT_TEMPLATE = """\
 Ты — участник группового чата по имени "Backseat". Твоя роль/характер задаётся \
@@ -64,12 +77,13 @@ async def decide_and_comment(bot_prompt: str, context: str, forced: bool = False
         "Content-Type": "application/json",
     }
 
-    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-        resp = await client.post(
-            f"{GONKAGATE_BASE_URL}/chat/completions", json=payload, headers=headers
-        )
-        resp.raise_for_status()
-        data = resp.json()
+    async with _semaphore:
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+            resp = await client.post(
+                f"{GONKAGATE_BASE_URL}/chat/completions", json=payload, headers=headers
+            )
+            resp.raise_for_status()
+            data = resp.json()
 
     raw = data["choices"][0]["message"]["content"].strip()
 
