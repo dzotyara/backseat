@@ -1,0 +1,7 @@
+services:
+  backseat:
+    build: .
+    container_name: backseat
+    restart: unless-stopped
+    env_file:
+      - .env
