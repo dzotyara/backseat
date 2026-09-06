@@ -7,6 +7,7 @@ import httpx
 
 log = logging.getLogger("backseat")
 
+
 def _env(name: str, default: str) -> str:
     """Like os.environ.get, but treats an empty string as 'not set' too
     (env_file entries like FOO= otherwise override real defaults with '')."""
@@ -18,6 +19,7 @@ GONKAGATE_API_KEY = os.environ["GONKAGATE_API_KEY"]
 # GonkaGate is assumed OpenAI-compatible. Override GONKAGATE_BASE_URL if the real endpoint differs.
 GONKAGATE_BASE_URL = _env("GONKAGATE_BASE_URL", "https://api.gonkagate.com/v1")
 MODEL_NAME = _env("MODEL_NAME", "deepseek-ai/deepseek-v4-flash-0731")
+# Output token budget (the model's JSON decision + comment).
 MAX_TOKENS = int(_env("MAX_TOKENS", "200"))
 REQUEST_TIMEOUT = float(_env("REQUEST_TIMEOUT_SECONDS", "30"))
 # GonkaGate enforces a concurrent-requests limit ("too many concurrent requests"),
@@ -26,19 +28,33 @@ GONKAGATE_MAX_CONCURRENCY = int(_env("GONKAGATE_MAX_CONCURRENCY", "1"))
 
 _semaphore = asyncio.Semaphore(GONKAGATE_MAX_CONCURRENCY)
 
+
+def estimate_tokens(text: str) -> int:
+    """Rough token estimate (~4 chars/token). We don't have GonkaGate/DeepSeek's
+    exact tokenizer, so this is only used to keep the input context within a
+    sane, configurable budget (MAX_INPUT_TOKENS in bot.py)."""
+    return max(1, len(text) // 4)
+
+
 _DECISION_SYSTEM_PROMPT_TEMPLATE = """\
 Ты — участник группового чата по имени "Backseat". Твоя роль/характер задаётся \
-следующей инструкцией: 
+следующей инструкцией:
 
 {bot_prompt}
 
-Тебе дана последняя история сообщений чата (могут быть подписаны именами \
-участников). Реши, стоит ли тебе сейчас встрять с комментарием, следуя своей \
-роли выше, или лучше промолчать (не нужно комментировать каждое сообщение — \
-только когда это уместно и добавляет что-то).
+Тебе дана последняя история сообщений чата. Тебя спросили сейчас по одной из причин:
+- тебя явно упомянули или ответили на твоё сообщение;
+- в последнем сообщении явно задан вопрос;
+- либо просто прошло достаточно сообщений с твоего последнего комментария, и сейчас
+  плановый момент, когда можно (но не обязательно) встрять.
 
-Если сообщение адресовано тебе напрямую (упоминание, реплай, вопрос к тебе) — \
-почти всегда стоит ответить.
+Приоритеты:
+- Если тебя упомянули или тебе ответили — почти всегда стоит ответить.
+- Если в последнем сообщении явно задан вопрос (необязательно тебе) и тебе есть что \
+полезное или уместное сказать в своём характере — стоит ответить на него.
+- Если повод — просто "подошла очередь" (планово), комментируй, только если реально \
+есть что сказать уместное по своему характеру; если нет — смело отвечай \
+should_comment=false, не нужно писать что-то через силу.
 
 Ответь СТРОГО в формате JSON без каких-либо пояснений и без markdown-разметки:
 {{"should_comment": true или false, "comment": "текст комментария или пустая строка"}}
@@ -47,8 +63,28 @@ comment должен быть коротким (1-2 предложения), в 
 без кавычек и без упоминания того, что ты ИИ или что ты анализируешь чат.
 """
 
+_REASON_HINTS = {
+    "mention_or_reply": (
+        "(Тебя явно позвали/упомянули или ответили на твоё сообщение — "
+        "почти наверняка стоит ответить.)"
+    ),
+    "question": (
+        "(В последнем сообщении, похоже, задан вопрос — если можешь полезно "
+        "ответить на него в своём характере, стоит это сделать.)"
+    ),
+    "scheduled": (
+        "(Прошло достаточно сообщений с последнего раза — сейчас нормальный момент, "
+        "чтобы либо вставить комментарий, либо смолчать, если сказать нечего.)"
+    ),
+}
 
-async def decide_and_comment(bot_prompt: str, context: str, forced: bool = False) -> str | None:
+
+async def decide_and_comment(
+    bot_prompt: str,
+    context: str,
+    forced: bool = False,
+    trigger_reason: str = "scheduled",
+) -> str | None:
     """
     Send the recent chat context to the model and let it decide whether to
     comment (following bot_prompt) and, if so, what to say.
@@ -57,12 +93,10 @@ async def decide_and_comment(bot_prompt: str, context: str, forced: bool = False
     (or on error).
     """
     system_prompt = _DECISION_SYSTEM_PROMPT_TEMPLATE.format(bot_prompt=bot_prompt)
-    user_content = context
-    if forced:
-        user_content += (
-            "\n\n(Тебя явно позвали/упомянули в последнем сообщении — "
-            "почти наверняка стоит ответить.)"
-        )
+    reason_hint = _REASON_HINTS.get(
+        "mention_or_reply" if forced else trigger_reason, _REASON_HINTS["scheduled"]
+    )
+    user_content = f"{context}\n\n{reason_hint}"
 
     payload = {
         "model": MODEL_NAME,
