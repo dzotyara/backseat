@@ -22,8 +22,10 @@ MODEL_NAME = _env("MODEL_NAME", "thinkingmachines/inkling:free")
 OPENROUTER_SITE_URL = _env("OPENROUTER_SITE_URL", "")
 OPENROUTER_APP_NAME = _env("OPENROUTER_APP_NAME", "Backseat")
 
-# Output token budget: decision JSON + a short (1-2 sentence) comment.
-MAX_TOKENS = int(_env("MAX_TOKENS", "100"))
+# Output token budget: decision JSON + a short comment. Reasoning models can
+# spend part of this on internal thinking before writing the actual content,
+# so keep some headroom (raise further if you see empty-content warnings).
+MAX_TOKENS = int(_env("MAX_TOKENS", "300"))
 REQUEST_TIMEOUT = float(_env("REQUEST_TIMEOUT_SECONDS", "30"))
 # Safety cap on simultaneous requests to the provider (OpenRouter doesn't publish
 # a hard concurrency limit like GonkaGate did, but keeping this bounded is cheap
@@ -129,7 +131,22 @@ async def decide(
             resp.raise_for_status()
             data = resp.json()
 
-    raw = data["choices"][0]["message"]["content"].strip()
+    choice = data["choices"][0]
+    message = choice.get("message", {})
+    raw = message.get("content")
+    finish_reason = choice.get("finish_reason")
+
+    if not raw:
+        # Common with "reasoning" models: they can burn the whole max_tokens
+        # budget on internal reasoning (sometimes in message["reasoning"]) and
+        # leave content empty/null, especially when finish_reason == "length".
+        log.warning(
+            "Model returned empty content (finish_reason=%s); consider raising "
+            "MAX_TOKENS if this keeps happening. Skipping this batch.",
+            finish_reason,
+        )
+        return None
+    raw = raw.strip()
 
     # Models sometimes wrap JSON in ```json ... ``` fences despite instructions.
     if raw.startswith("```"):
