@@ -15,88 +15,89 @@ def _env(name: str, default: str) -> str:
     return value if value else default
 
 
-GONKAGATE_API_KEY = os.environ["GONKAGATE_API_KEY"]
-# GonkaGate is assumed OpenAI-compatible. Override GONKAGATE_BASE_URL if the real endpoint differs.
-GONKAGATE_BASE_URL = _env("GONKAGATE_BASE_URL", "https://api.gonkagate.com/v1")
-MODEL_NAME = _env("MODEL_NAME", "deepseek-ai/deepseek-v4-flash-0731")
-# Output token budget (the model's JSON decision + comment).
-MAX_TOKENS = int(_env("MAX_TOKENS", "200"))
-REQUEST_TIMEOUT = float(_env("REQUEST_TIMEOUT_SECONDS", "30"))
-# GonkaGate enforces a concurrent-requests limit ("too many concurrent requests"),
-# separate from any per-minute rate limit. Keep this at or below your plan's limit.
-GONKAGATE_MAX_CONCURRENCY = int(_env("GONKAGATE_MAX_CONCURRENCY", "1"))
+OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
+OPENROUTER_BASE_URL = _env("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+MODEL_NAME = _env("MODEL_NAME", "thinkingmachines/inkling:free")
+# Optional, only used for OpenRouter's own leaderboards — harmless to leave blank.
+OPENROUTER_SITE_URL = _env("OPENROUTER_SITE_URL", "")
+OPENROUTER_APP_NAME = _env("OPENROUTER_APP_NAME", "Backseat")
 
-_semaphore = asyncio.Semaphore(GONKAGATE_MAX_CONCURRENCY)
+# Output token budget: decision JSON + a short (1-2 sentence) comment.
+MAX_TOKENS = int(_env("MAX_TOKENS", "100"))
+REQUEST_TIMEOUT = float(_env("REQUEST_TIMEOUT_SECONDS", "30"))
+# Safety cap on simultaneous requests to the provider (OpenRouter doesn't publish
+# a hard concurrency limit like GonkaGate did, but keeping this bounded is cheap
+# insurance and keeps a single chat's batch calls from piling up).
+MAX_CONCURRENCY = int(_env("OPENROUTER_MAX_CONCURRENCY", "2"))
+
+_semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
 
 
 def estimate_tokens(text: str) -> int:
-    """Rough token estimate (~4 chars/token). We don't have GonkaGate/DeepSeek's
-    exact tokenizer, so this is only used to keep the input context within a
+    """Rough token estimate (~4 chars/token). We don't have the exact tokenizer
+    for every OpenRouter-hosted model, so this only keeps input context within a
     sane, configurable budget (MAX_INPUT_TOKENS in bot.py)."""
     return max(1, len(text) // 4)
 
 
-_DECISION_SYSTEM_PROMPT_TEMPLATE = """\
-Ты — участник группового чата по имени "Backseat". Твоя роль/характер задаётся \
-следующей инструкцией:
+_SYSTEM_TEMPLATE = """\
+Ты — участник группового чата, а не ассистент. Вот твоя личность и стиль общения:
 
 {bot_prompt}
 
-Тебе дана последняя история сообщений чата. Тебя спросили сейчас по одной из причин:
-- тебя явно упомянули или ответили на твоё сообщение;
-- в последнем сообщении явно задан вопрос;
-- либо просто прошло достаточно сообщений с твоего последнего комментария, и сейчас
-  плановый момент, когда можно (но не обязательно) встрять.
+Тебе показывают две части истории:
+CONTEXT — более старые сообщения, только для понимания разговора, персонажей и \
+callback-шуток. Это НЕ повод отвечать сам по себе.
+NEW — последняя пачка сообщений, единственное, на что можно отреагировать сейчас.
 
-Приоритеты:
-- Если тебя упомянули или тебе ответили — почти всегда стоит ответить.
-- Если в последнем сообщении явно задан вопрос (необязательно тебе) и тебе есть что \
-полезное или уместное сказать в своём характере — стоит ответить на него.
-- Если повод — просто "подошла очередь" (планово), комментируй, только если реально \
-есть что сказать уместное по своему характеру; если нет — смело отвечай \
-should_comment=false, не нужно писать что-то через силу.
+Формат каждой строки: id|автор|текст
+Иногда: id_начала-id_конца|автор|текст|xN — значит N одинаковых сообщений подряд, \
+считай это одной ситуацией, а не N поводами ответить.
 
-Ответь СТРОГО в формате JSON без каких-либо пояснений и без markdown-разметки:
-{{"should_comment": true или false, "comment": "текст комментария или пустая строка"}}
+Правила:
+- Автор рядом с сообщением — это всегда источник истины; никогда не путай, кто что \
+написал, и не приписывай реплику другому участнику.
+- На весь NEW разрешён максимум один комментарий.
+- Отвечай, когда: тебя прямо позвали (@упоминание) или ответили на твоё сообщение; \
+тебе или в чат задали вопрос, на который есть что ответить; есть по-настоящему \
+удачный повод для шутки, сарказма или callback'а; несколько сообщений вместе \
+образуют смешную сцену.
+- Не отвечай, когда: обычный разговор идёт нормально и без тебя; сообщения вроде \
+"ок"/"ага"/"понял"; шутка получится слабой, натянутой или повторяющей то, что ты \
+уже говорил недавно.
+- В случае сомнения — respond=false.
 
-comment должен быть коротким (1-2 предложения), в стиле обычного сообщения в чат, \
-без кавычек и без упоминания того, что ты ИИ или что ты анализируешь чат.
-"""
+Ответь СТРОГО в формате JSON, без пояснений, рассуждений и markdown-разметки:
+{{"respond": true или false, "reply_to_message_id": <id из NEW или null>, "comment": "текст или null"}}
 
-_REASON_HINTS = {
-    "mention_or_reply": (
-        "(Тебя явно позвали/упомянули или ответили на твоё сообщение — "
-        "почти наверняка стоит ответить.)"
-    ),
-    "question": (
-        "(В последнем сообщении, похоже, задан вопрос — если можешь полезно "
-        "ответить на него в своём характере, стоит это сделать.)"
-    ),
-    "scheduled": (
-        "(Прошло достаточно сообщений с последнего раза — сейчас нормальный момент, "
-        "чтобы либо вставить комментарий, либо смолчать, если сказать нечего.)"
-    ),
-}
+reply_to_message_id обязателен и должен быть одним из id, реально присутствующих \
+в NEW, если respond=true; иначе null. comment — обычно 1-2 предложения, в стиле \
+обычного сообщения в чат, без кавычек и без упоминания того, что ты ИИ."""
+
+_FORCED_HINT = (
+    "\n\n(В этой пачке тебя явно позвали/упомянули или ответили на твоё сообщение — "
+    "это почти всегда повод ответить.)"
+)
 
 
-async def decide_and_comment(
+async def decide(
     bot_prompt: str,
-    context: str,
+    context_text: str,
+    new_text: str,
     forced: bool = False,
-    trigger_reason: str = "scheduled",
-) -> str | None:
+) -> dict | None:
     """
-    Send the recent chat context to the model and let it decide whether to
-    comment (following bot_prompt) and, if so, what to say.
+    Ask the model whether Backseat should jump into the conversation given
+    CONTEXT (older history) and NEW (the batch of messages just collected).
 
-    Returns the comment text, or None if the model decided to stay silent
-    (or on error).
+    Returns a dict {"respond": bool, "reply_to_message_id": int | None,
+    "comment": str | None}, or None on a request/parsing failure (caller should
+    treat that as "stay silent").
     """
-    system_prompt = _DECISION_SYSTEM_PROMPT_TEMPLATE.format(bot_prompt=bot_prompt)
-    reason_hint = _REASON_HINTS.get(
-        "mention_or_reply" if forced else trigger_reason, _REASON_HINTS["scheduled"]
-    )
-    user_content = f"{context}\n\n{reason_hint}"
+    system_prompt = _SYSTEM_TEMPLATE.format(bot_prompt=bot_prompt)
+    user_content = f"CONTEXT:\n{context_text or '(пусто)'}\n\nNEW:\n{new_text}"
+    if forced:
+        user_content += _FORCED_HINT
 
     payload = {
         "model": MODEL_NAME,
@@ -107,14 +108,18 @@ async def decide_and_comment(
         ],
     }
     headers = {
-        "Authorization": f"Bearer {GONKAGATE_API_KEY}",
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
     }
+    if OPENROUTER_SITE_URL:
+        headers["HTTP-Referer"] = OPENROUTER_SITE_URL
+    if OPENROUTER_APP_NAME:
+        headers["X-Title"] = OPENROUTER_APP_NAME
 
     async with _semaphore:
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
             resp = await client.post(
-                f"{GONKAGATE_BASE_URL}/chat/completions", json=payload, headers=headers
+                f"{OPENROUTER_BASE_URL}/chat/completions", json=payload, headers=headers
             )
             resp.raise_for_status()
             data = resp.json()
@@ -133,8 +138,12 @@ async def decide_and_comment(
         log.warning("Model did not return valid JSON, ignoring. Raw: %r", raw)
         return None
 
-    if not parsed.get("should_comment"):
+    if not isinstance(parsed, dict) or "respond" not in parsed:
+        log.warning("Model JSON missing expected fields, ignoring. Raw: %r", raw)
         return None
 
-    comment = (parsed.get("comment") or "").strip()
-    return comment or None
+    return {
+        "respond": bool(parsed.get("respond")),
+        "reply_to_message_id": parsed.get("reply_to_message_id"),
+        "comment": (parsed.get("comment") or "").strip() or None,
+    }

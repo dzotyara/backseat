@@ -1,16 +1,16 @@
 import asyncio
 import logging
 import os
-import random
 import time
-from collections import defaultdict, deque
+from collections import deque
+from dataclasses import dataclass, field
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ChatType
 from aiogram.filters import Command, CommandStart
-from aiogram.types import BotCommand, Message
+from aiogram.types import BotCommand, Message, ReplyParameters
 
-from llm_client import decide_and_comment, estimate_tokens
+from llm_client import decide, estimate_tokens
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("backseat")
@@ -24,23 +24,33 @@ def _env(name: str, default: str) -> str:
 
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-BOT_PROMPT = _env("BOT_PROMPT", "Комментируй сообщения участников чата коротко и едко.")
-CONTEXT_WINDOW = int(_env("CONTEXT_WINDOW", "15"))
+
+_BOT_PROMPT_FILE = _env("BOT_PROMPT_FILE", "prompt.txt")
+_BOT_PROMPT_INLINE_DEFAULT = "Комментируй сообщения участников чата коротко и едко."
+if _BOT_PROMPT_FILE and os.path.isfile(_BOT_PROMPT_FILE):
+    with open(_BOT_PROMPT_FILE, encoding="utf-8") as f:
+        BOT_PROMPT = f.read().strip()
+    log.info("Loaded BOT_PROMPT from %s", _BOT_PROMPT_FILE)
+else:
+    BOT_PROMPT = _env("BOT_PROMPT", _BOT_PROMPT_INLINE_DEFAULT)
+    log.info("BOT_PROMPT_FILE not found, using inline BOT_PROMPT env var")
+
+# --- Batching / debounce ---
+CONTEXT_WINDOW = int(_env("CONTEXT_WINDOW", "25"))
+DEBOUNCE_SECONDS = float(_env("DEBOUNCE_SECONDS", "5"))
+MENTION_DEBOUNCE_SECONDS = float(_env("MENTION_DEBOUNCE_SECONDS", "2"))
+MAX_BATCH_WAIT_SECONDS = float(_env("MAX_BATCH_WAIT_SECONDS", "15"))
+MAX_BATCH_MESSAGES = int(_env("MAX_BATCH_MESSAGES", "15"))
+MAX_CONTEXT_MESSAGE_CHARS = int(_env("MAX_CONTEXT_MESSAGE_CHARS", "500"))
+MAX_NEW_MESSAGE_CHARS = int(_env("MAX_NEW_MESSAGE_CHARS", "1000"))
 MAX_INPUT_TOKENS = int(_env("MAX_INPUT_TOKENS", "1500"))
-# Comment roughly once every MIN..MAX messages (random each time), unless mentioned/replied-to/asked a question.
-MIN_MESSAGES_BETWEEN_COMMENTS = int(_env("MIN_MESSAGES_BETWEEN_COMMENTS", "2"))
-MAX_MESSAGES_BETWEEN_COMMENTS = int(_env("MAX_MESSAGES_BETWEEN_COMMENTS", "15"))
-# Safety net so the bot can't reply more than once per this many seconds even if triggered repeatedly.
-MIN_SECONDS_BETWEEN_COMMENTS = float(_env("MIN_SECONDS_BETWEEN_COMMENTS", "10"))
+# Cooldown counts from the last comment Backseat actually sent, not from decisions.
+MIN_SECONDS_BETWEEN_COMMENTS = float(_env("MIN_SECONDS_BETWEEN_COMMENTS", "25"))
+# Whether a direct mention/reply-to-bot skips the cooldown (batching still applies either way).
+MENTION_BYPASSES_COOLDOWN = _env("MENTION_BYPASSES_COOLDOWN", "true").lower() == "true"
 
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 dp = Dispatcher()
-
-# per-chat message history buffer, used as context for the model's decision
-history: dict[int, deque] = defaultdict(lambda: deque(maxlen=CONTEXT_WINDOW))
-messages_since_check: dict[int, int] = defaultdict(int)
-next_threshold: dict[int, int] = {}
-last_comment_at: dict[int, float] = defaultdict(float)
 
 BOT_COMMANDS = [
     BotCommand(command="start", description="О боте и как он работает"),
@@ -49,41 +59,72 @@ BOT_COMMANDS = [
     BotCommand(command="status", description="Текущие настройки бота"),
 ]
 
-
-def get_threshold(chat_id: int) -> int:
-    if chat_id not in next_threshold:
-        next_threshold[chat_id] = random.randint(
-            MIN_MESSAGES_BETWEEN_COMMENTS, MAX_MESSAGES_BETWEEN_COMMENTS
-        )
-    return next_threshold[chat_id]
+BOT_USERNAME: str | None = None  # resolved once at startup
 
 
-def reset_threshold(chat_id: int) -> None:
-    """Call after every actual LLM check (whether or not it produced a comment)
-    to restart the countdown to the next scheduled check."""
-    next_threshold[chat_id] = random.randint(
-        MIN_MESSAGES_BETWEEN_COMMENTS, MAX_MESSAGES_BETWEEN_COMMENTS
-    )
-    messages_since_check[chat_id] = 0
+@dataclass
+class ChatState:
+    pending: list[dict] = field(default_factory=list)
+    context: deque = field(default_factory=lambda: deque(maxlen=CONTEXT_WINDOW))
+    batch_start: float | None = None
+    debounce_task: asyncio.Task | None = None
+    last_comment_at: float = 0.0
+    process_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
-def format_history(chat_id: int) -> str:
-    lines = [f"{name}: {text}" for name, text in history[chat_id]]
+_chat_states: dict[int, ChatState] = {}
+
+
+def get_state(chat_id: int) -> ChatState:
+    if chat_id not in _chat_states:
+        _chat_states[chat_id] = ChatState()
+    return _chat_states[chat_id]
+
+
+def _truncate(text: str, limit: int) -> str:
+    text = text.replace("\n", " ")
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def serialize_context(state: ChatState) -> str:
+    lines = [
+        f"{m['id']}|{m['author']}|{_truncate(m['text'], MAX_CONTEXT_MESSAGE_CHARS)}"
+        for m in state.context
+    ]
     while lines and estimate_tokens("\n".join(lines)) > MAX_INPUT_TOKENS:
         lines.pop(0)
     return "\n".join(lines)
 
 
-def looks_like_question(text: str) -> bool:
-    return text.strip().endswith("?")
+def serialize_new(batch: list[dict]) -> str:
+    """Compact 'id|author|text' lines, collapsing consecutive identical
+    (author, text) repeats into 'id_start-id_end|author|text|xN'."""
+    lines = []
+    i = 0
+    while i < len(batch):
+        j = i
+        while (
+            j + 1 < len(batch)
+            and batch[j + 1]["author"] == batch[i]["author"]
+            and batch[j + 1]["text"] == batch[i]["text"]
+        ):
+            j += 1
+        group = batch[i : j + 1]
+        text = _truncate(group[0]["text"], MAX_NEW_MESSAGE_CHARS)
+        if len(group) > 1:
+            lines.append(f"{group[0]['id']}-{group[-1]['id']}|{group[0]['author']}|{text}|x{len(group)}")
+        else:
+            lines.append(f"{group[0]['id']}|{group[0]['author']}|{text}")
+        i = j + 1
+    return "\n".join(lines)
 
 
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     await message.reply(
-        "Привет, я Backseat. Иногда встреваю в чат с комментариями по своему характеру, "
-        "но не на каждое сообщение — раз в несколько сообщений. Если тегнёшь меня, "
-        "ответишь на моё сообщение или явно задашь вопрос — отвечу почти всегда."
+        "Привет, я Backseat. Слежу за чатом и иногда вставляю комментарий по своему "
+        "характеру — не на каждое сообщение, а когда есть повод. На упоминание, "
+        "ответ мне или явный вопрос реагирую почти всегда."
     )
 
 
@@ -100,66 +141,140 @@ async def cmd_ping(message: Message):
 
 @dp.message(Command("status"))
 async def cmd_status(message: Message):
-    chat_id = message.chat.id
+    state = get_state(message.chat.id)
+    now = time.monotonic()
+    cooldown_left = max(0.0, MIN_SECONDS_BETWEEN_COMMENTS - (now - state.last_comment_at))
     await message.reply(
         "Настройки:\n"
-        f"— комментирую раз в {MIN_MESSAGES_BETWEEN_COMMENTS}-{MAX_MESSAGES_BETWEEN_COMMENTS} "
-        "сообщений (случайно каждый раз)\n"
-        f"— окно контекста: до {CONTEXT_WINDOW} сообщений / ~{MAX_INPUT_TOKENS} токенов\n"
-        f"— до следующей плановой проверки в этом чате: "
-        f"{max(0, get_threshold(chat_id) - messages_since_check[chat_id])} сообщений\n"
-        "— на упоминание, ответ мне или явный вопрос реагирую почти всегда"
+        f"— debounce: {DEBOUNCE_SECONDS}с (упоминание/ответ: {MENTION_DEBOUNCE_SECONDS}с), "
+        f"макс. ожидание пачки: {MAX_BATCH_WAIT_SECONDS}с, макс. размер пачки: {MAX_BATCH_MESSAGES}\n"
+        f"— кулдаун между комментариями: {MIN_SECONDS_BETWEEN_COMMENTS}с "
+        f"(осталось: {cooldown_left:.0f}с)\n"
+        f"— контекст: до {CONTEXT_WINDOW} сообщений / ~{MAX_INPUT_TOKENS} токенов\n"
+        f"— сейчас в необработанной пачке: {len(state.pending)} сообщений"
     )
+
+
+def _schedule_batch(chat_id: int, delay: float) -> None:
+    state = get_state(chat_id)
+    if state.debounce_task and not state.debounce_task.done():
+        state.debounce_task.cancel()
+    state.debounce_task = asyncio.create_task(_debounce_then_process(chat_id, delay))
+
+
+async def _debounce_then_process(chat_id: int, delay: float) -> None:
+    try:
+        if delay > 0:
+            await asyncio.sleep(delay)
+    except asyncio.CancelledError:
+        return
+    await process_batch(chat_id)
 
 
 @dp.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.text)
 async def on_group_message(message: Message):
     chat_id = message.chat.id
+    state = get_state(chat_id)
     name = message.from_user.full_name if message.from_user else "unknown"
-    history[chat_id].append((name, message.text))
-    messages_since_check[chat_id] += 1
 
-    bot_username = (await bot.get_me()).username
-    mentioned = bool(bot_username) and f"@{bot_username}".lower() in message.text.lower()
+    mentioned = bool(BOT_USERNAME) and f"@{BOT_USERNAME}".lower() in message.text.lower()
     is_reply_to_bot = bool(
         message.reply_to_message
         and message.reply_to_message.from_user
-        and message.reply_to_message.from_user.username == bot_username
+        and message.reply_to_message.from_user.username == BOT_USERNAME
     )
-    is_question = looks_like_question(message.text)
     forced = mentioned or is_reply_to_bot
 
-    threshold_reached = messages_since_check[chat_id] >= get_threshold(chat_id)
-    if not (forced or is_question or threshold_reached):
-        return
+    state.pending.append(
+        {"id": message.message_id, "author": name, "text": message.text, "forced": forced}
+    )
+    if state.batch_start is None:
+        state.batch_start = time.monotonic()
 
-    now = time.monotonic()
-    if not forced and (now - last_comment_at[chat_id] < MIN_SECONDS_BETWEEN_COMMENTS):
-        return
+    any_forced = any(m["forced"] for m in state.pending)
+    base_delay = MENTION_DEBOUNCE_SECONDS if any_forced else DEBOUNCE_SECONDS
+    elapsed = time.monotonic() - state.batch_start
+    remaining_wait = MAX_BATCH_WAIT_SECONDS - elapsed
+    delay = max(0.0, min(base_delay, remaining_wait))
 
-    trigger_reason = "mention_or_reply" if forced else ("question" if is_question else "scheduled")
-    context_text = format_history(chat_id)
+    if len(state.pending) >= MAX_BATCH_MESSAGES:
+        delay = 0.0
 
-    try:
-        comment = await decide_and_comment(
-            BOT_PROMPT, context_text, forced=forced, trigger_reason=trigger_reason
-        )
-    except Exception:
-        log.exception("Failed to get a decision from the LLM")
-        return
+    _schedule_batch(chat_id, delay)
 
-    # A check happened (regardless of the outcome) — restart the countdown to the next one.
-    reset_threshold(chat_id)
 
-    if not comment:
-        return
+async def process_batch(chat_id: int) -> None:
+    state = get_state(chat_id)
+    async with state.process_lock:
+        if not state.pending:
+            return
 
-    last_comment_at[chat_id] = now
-    await message.reply(comment)
+        # Atomically detach the current batch; anything arriving during the
+        # upcoming LLM call starts a fresh pending list / batch_start.
+        batch = state.pending
+        state.pending = []
+        state.batch_start = None
+
+        forced = any(m["forced"] for m in batch)
+        now = time.monotonic()
+        cooldown_active = (now - state.last_comment_at) < MIN_SECONDS_BETWEEN_COMMENTS
+        skip_for_cooldown = cooldown_active and not (forced and MENTION_BYPASSES_COOLDOWN)
+
+        if skip_for_cooldown:
+            state.context.extend(batch)
+            log.info("chat_id=%s decision=skip cooldown_skip=true batch_size=%d", chat_id, len(batch))
+            return
+
+        context_text = serialize_context(state)
+        new_text = serialize_new(batch)
+
+        try:
+            result = await decide(BOT_PROMPT, context_text, new_text, forced=forced)
+        except Exception:
+            log.exception("chat_id=%s LLM call failed, batch_size=%d", chat_id, len(batch))
+            state.context.extend(batch)
+            return
+
+        state.context.extend(batch)
+
+        if not result or not result.get("respond"):
+            log.info("chat_id=%s decision=skip batch_size=%d", chat_id, len(batch))
+            return
+
+        valid_ids = {m["id"] for m in batch}
+        reply_id = result.get("reply_to_message_id")
+        if reply_id not in valid_ids:
+            reply_id = batch[-1]["id"]
+
+        comment = result.get("comment")
+        if not comment:
+            log.info("chat_id=%s decision=skip (empty comment) batch_size=%d", chat_id, len(batch))
+            return
+
+        try:
+            await bot.send_message(
+                chat_id, comment, reply_parameters=ReplyParameters(message_id=reply_id)
+            )
+        except Exception:
+            log.warning(
+                "chat_id=%s failed to reply to message_id=%s (maybe deleted), sending without reply",
+                chat_id, reply_id,
+            )
+            try:
+                await bot.send_message(chat_id, comment)
+            except Exception:
+                log.exception("chat_id=%s failed to send comment at all", chat_id)
+                return
+
+        state.last_comment_at = now
+        log.info("chat_id=%s decision=reply reply_to=%s batch_size=%d", chat_id, reply_id, len(batch))
 
 
 async def main():
+    global BOT_USERNAME
     log.info("Starting Backseat bot")
+    me = await bot.get_me()
+    BOT_USERNAME = me.username
     await bot.set_my_commands(BOT_COMMANDS)
     await dp.start_polling(bot)
 
