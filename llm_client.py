@@ -8,11 +8,7 @@ import httpx
 log = logging.getLogger("backseat")
 
 
-def _env(name: str, default: str) -> str:
-    """Like os.environ.get, but treats an empty string as 'not set' too
-    (env_file entries like FOO= otherwise override real defaults with '')."""
-    value = os.environ.get(name)
-    return value if value else default
+from config import _env
 
 
 OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
@@ -33,6 +29,15 @@ REQUEST_TIMEOUT = float(_env("REQUEST_TIMEOUT_SECONDS", "30"))
 MAX_CONCURRENCY = int(_env("OPENROUTER_MAX_CONCURRENCY", "2"))
 
 _semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
+_client: httpx.AsyncClient | None = None
+
+
+def _get_client() -> httpx.AsyncClient:
+    """Lazy singleton — reuses connection pool and HTTP/2 across requests."""
+    global _client
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient(timeout=REQUEST_TIMEOUT, http2=True)
+    return _client
 
 
 def estimate_tokens(text: str) -> int:
@@ -52,8 +57,11 @@ CONTEXT — более старые сообщения, только для по
 callback-шуток. Это НЕ повод отвечать сам по себе.
 NEW — последняя пачка сообщений, единственное, на что можно отреагировать сейчас.
 
-Формат каждой строки: id|автор|текст
-Иногда: id_начала-id_конца|автор|текст|xN — значит N одинаковых сообщений подряд, \
+Формат каждой строки: msg_id|user_id|автор|текст
+user_id — это Telegram ID пользователя, он позволяет точно определить, кто написал \
+сообщение (даже если имя изменилось). Используй user_id для сопоставления с описанием \
+участников в промпте (например, если в промпте указан ID 807998762 — ищи его в поле user_id).
+Иногда: id_начала-id_конца|user_id|автор|текст|xN — значит N одинаковых сообщений подряд, \
 считай это одной ситуацией, а не N поводами ответить.
 
 Правила:
@@ -72,7 +80,7 @@ NEW — последняя пачка сообщений, единственно
 Ответь СТРОГО в формате JSON, без пояснений, рассуждений и markdown-разметки:
 {{"respond": true или false, "reply_to_message_id": <id из NEW или null>, "comment": "текст или null"}}
 
-reply_to_message_id обязателен и должен быть одним из id, реально присутствующих \
+reply_to_message_id обязателен и должен быть одним из msg_id, реально присутствующих \
 в NEW, если respond=true; иначе null. comment — обычно 1-2 предложения, в стиле \
 обычного сообщения в чат, без кавычек и без упоминания того, что ты ИИ."""
 
@@ -119,17 +127,17 @@ async def decide(
         headers["X-Title"] = OPENROUTER_APP_NAME
 
     async with _semaphore:
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-            resp = await client.post(
-                f"{OPENROUTER_BASE_URL}/chat/completions", json=payload, headers=headers
+        client = _get_client()
+        resp = await client.post(
+            f"{OPENROUTER_BASE_URL}/chat/completions", json=payload, headers=headers
+        )
+        if resp.status_code >= 400:
+            log.error(
+                "OpenRouter HTTP %s for model=%s: %s",
+                resp.status_code, MODEL_NAME, resp.text[:2000],
             )
-            if resp.status_code >= 400:
-                log.error(
-                    "OpenRouter HTTP %s for model=%s: %s",
-                    resp.status_code, MODEL_NAME, resp.text[:2000],
-                )
-            resp.raise_for_status()
-            data = resp.json()
+        resp.raise_for_status()
+        data = resp.json()
 
     choice = data["choices"][0]
     message = choice.get("message", {})
