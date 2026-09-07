@@ -121,6 +121,11 @@ async def decide(
             resp = await client.post(
                 f"{OPENROUTER_BASE_URL}/chat/completions", json=payload, headers=headers
             )
+            if resp.status_code >= 400:
+                log.error(
+                    "OpenRouter HTTP %s for model=%s: %s",
+                    resp.status_code, MODEL_NAME, resp.text[:2000],
+                )
             resp.raise_for_status()
             data = resp.json()
 
