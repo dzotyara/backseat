@@ -1,14 +1,14 @@
 import time
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import bot as bot_module
-from bot import ChatState, _truncate, serialize_new
+from bot import ChatState, _is_bot_mentioned, _truncate, serialize_new
 
 
-def make_msg(id_, author, text, forced=False):
-    return {"id": id_, "author": author, "text": text, "forced": forced}
+def make_msg(id_, author, text, forced=False, user_id=0):
+    return {"id": id_, "user_id": user_id, "author": author, "text": text, "forced": forced}
 
 
 def test_serialize_new_collapses_consecutive_duplicates():
@@ -20,14 +20,14 @@ def test_serialize_new_collapses_consecutive_duplicates():
     ]
     out = serialize_new(batch)
     lines = out.splitlines()
-    assert lines[0] == "1-3|Никита|@bot здарова|x3"
-    assert lines[1] == "4|Андрей|прив"
+    assert lines[0] == "1-3|0|Никита|@bot здарова|x3"
+    assert lines[1] == "4|0|Андрей|прив"
 
 
 def test_serialize_new_keeps_distinct_messages_separate():
     batch = [make_msg(1, "Никита", "привет"), make_msg(2, "Никита", "как дела")]
     out = serialize_new(batch)
-    assert out.splitlines() == ["1|Никита|привет", "2|Никита|как дела"]
+    assert out.splitlines() == ["1|0|Никита|привет", "2|0|Никита|как дела"]
 
 
 def test_truncate_adds_ellipsis_when_over_limit():
@@ -106,3 +106,63 @@ async def test_respond_false_sends_nothing_but_updates_context():
 
     mock_send.assert_not_called()
     assert len(state.context) == 1
+
+
+# --- _is_bot_mentioned tests ---
+
+
+def _make_mock_message(text="", entities=None):
+    msg = MagicMock()
+    msg.text = text
+    msg.entities = entities
+    return msg
+
+
+def _make_entity(etype, offset=0, length=0, user=None):
+    ent = MagicMock()
+    ent.type = etype
+    ent.offset = offset
+    ent.length = length
+    ent.user = user
+    return ent
+
+
+def test_is_bot_mentioned_by_username_entity():
+    bot_module.BOT_USERNAME = "backseat_bot"
+    bot_module.BOT_ID = 123
+    ent = _make_entity("mention", offset=0, length=14)
+    msg = _make_mock_message(text="@backseat_bot привет", entities=[ent])
+    assert _is_bot_mentioned(msg) is True
+
+
+def test_is_bot_mentioned_by_text_mention_entity():
+    bot_module.BOT_USERNAME = "backseat_bot"
+    bot_module.BOT_ID = 123
+    user = MagicMock()
+    user.id = 123
+    ent = _make_entity("text_mention", offset=0, length=4, user=user)
+    msg = _make_mock_message(text="Бот, скажи что-нибудь", entities=[ent])
+    assert _is_bot_mentioned(msg) is True
+
+
+def test_is_bot_mentioned_no_mention():
+    bot_module.BOT_USERNAME = "backseat_bot"
+    bot_module.BOT_ID = 123
+    msg = _make_mock_message(text="привет всем", entities=[])
+    assert _is_bot_mentioned(msg) is False
+
+
+def test_is_bot_mentioned_fallback_text_search():
+    bot_module.BOT_USERNAME = "backseat_bot"
+    bot_module.BOT_ID = 123
+    msg = _make_mock_message(text="эй @backseat_bot ответь", entities=None)
+    assert _is_bot_mentioned(msg) is True
+
+
+def test_is_bot_mentioned_wrong_username_entity():
+    bot_module.BOT_USERNAME = "backseat_bot"
+    bot_module.BOT_ID = 123
+    ent = _make_entity("mention", offset=0, length=10)
+    msg = _make_mock_message(text="@other_bot привет", entities=[ent])
+    assert _is_bot_mentioned(msg) is False
+

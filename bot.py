@@ -5,6 +5,10 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ChatType
 from aiogram.filters import Command, CommandStart
@@ -16,11 +20,7 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("backseat")
 
 
-def _env(name: str, default: str) -> str:
-    """Like os.environ.get, but treats an empty string as 'not set' too
-    (env_file entries like FOO= otherwise override real defaults with '')."""
-    value = os.environ.get(name)
-    return value if value else default
+from config import _env
 
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
@@ -60,6 +60,7 @@ BOT_COMMANDS = [
 ]
 
 BOT_USERNAME: str | None = None  # resolved once at startup
+BOT_ID: int | None = None  # resolved once at startup
 
 
 @dataclass
@@ -88,7 +89,7 @@ def _truncate(text: str, limit: int) -> str:
 
 def serialize_context(state: ChatState) -> str:
     lines = [
-        f"{m['id']}|{m['author']}|{_truncate(m['text'], MAX_CONTEXT_MESSAGE_CHARS)}"
+        f"{m['id']}|{m['user_id']}|{m['author']}|{_truncate(m['text'], MAX_CONTEXT_MESSAGE_CHARS)}"
         for m in state.context
     ]
     while lines and estimate_tokens("\n".join(lines)) > MAX_INPUT_TOKENS:
@@ -97,8 +98,8 @@ def serialize_context(state: ChatState) -> str:
 
 
 def serialize_new(batch: list[dict]) -> str:
-    """Compact 'id|author|text' lines, collapsing consecutive identical
-    (author, text) repeats into 'id_start-id_end|author|text|xN'."""
+    """Compact 'id|user_id|author|text' lines, collapsing consecutive identical
+    (author, text) repeats into 'id_start-id_end|user_id|author|text|xN'."""
     lines = []
     i = 0
     while i < len(batch):
@@ -111,10 +112,11 @@ def serialize_new(batch: list[dict]) -> str:
             j += 1
         group = batch[i : j + 1]
         text = _truncate(group[0]["text"], MAX_NEW_MESSAGE_CHARS)
+        uid = group[0]["user_id"]
         if len(group) > 1:
-            lines.append(f"{group[0]['id']}-{group[-1]['id']}|{group[0]['author']}|{text}|x{len(group)}")
+            lines.append(f"{group[0]['id']}-{group[-1]['id']}|{uid}|{group[0]['author']}|{text}|x{len(group)}")
         else:
-            lines.append(f"{group[0]['id']}|{group[0]['author']}|{text}")
+            lines.append(f"{group[0]['id']}|{uid}|{group[0]['author']}|{text}")
         i = j + 1
     return "\n".join(lines)
 
@@ -171,22 +173,47 @@ async def _debounce_then_process(chat_id: int, delay: float) -> None:
     await process_batch(chat_id)
 
 
+def _is_bot_mentioned(message: Message) -> bool:
+    """Check whether this message mentions the bot via entities or plain text."""
+    entities = message.entities or []
+    text = message.text or ""
+    for ent in entities:
+        if ent.type == "mention" and BOT_USERNAME:
+            # @username mention — extract the mentioned username from text
+            mention_text = text[ent.offset : ent.offset + ent.length]
+            if mention_text.lower() == f"@{BOT_USERNAME}".lower():
+                return True
+        elif ent.type == "text_mention" and ent.user:
+            # Mention via user picker (no public username) — matched by user id
+            if BOT_ID and ent.user.id == BOT_ID:
+                return True
+    # Fallback: plain-text search (covers edge cases where entities are absent)
+    if BOT_USERNAME and f"@{BOT_USERNAME}".lower() in text.lower():
+        return True
+    return False
+
+
 @dp.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.text)
 async def on_group_message(message: Message):
     chat_id = message.chat.id
     state = get_state(chat_id)
     name = message.from_user.full_name if message.from_user else "unknown"
+    user_id = message.from_user.id if message.from_user else 0
 
-    mentioned = bool(BOT_USERNAME) and f"@{BOT_USERNAME}".lower() in message.text.lower()
+    mentioned = _is_bot_mentioned(message)
     is_reply_to_bot = bool(
         message.reply_to_message
         and message.reply_to_message.from_user
-        and message.reply_to_message.from_user.username == BOT_USERNAME
+        and (
+            message.reply_to_message.from_user.id == BOT_ID
+            if BOT_ID
+            else message.reply_to_message.from_user.username == BOT_USERNAME
+        )
     )
     forced = mentioned or is_reply_to_bot
 
     state.pending.append(
-        {"id": message.message_id, "author": name, "text": message.text, "forced": forced}
+        {"id": message.message_id, "user_id": user_id, "author": name, "text": message.text, "forced": forced}
     )
     if state.batch_start is None:
         state.batch_start = time.monotonic()
@@ -271,10 +298,12 @@ async def process_batch(chat_id: int) -> None:
 
 
 async def main():
-    global BOT_USERNAME
+    global BOT_USERNAME, BOT_ID
     log.info("Starting Backseat bot")
     me = await bot.get_me()
     BOT_USERNAME = me.username
+    BOT_ID = me.id
+    log.info("Bot identity resolved: @%s (id=%s)", BOT_USERNAME, BOT_ID)
     await bot.set_my_commands(BOT_COMMANDS)
     await dp.start_polling(bot)
 
