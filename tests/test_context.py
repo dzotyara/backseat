@@ -38,15 +38,40 @@ async def test_reply_context_has_every_section(tmp_path: Path, storage: Storage,
     assert sections["ПАМЯТЬ ЧАТА"].endswith("Иван обещал бегать по утрам.")
     assert "с понедельника бегаю" in sections["ЧТО ПИСАЛИ РАНЬШЕ — Иван"]
     assert "ЧТО ПИСАЛИ РАНЬШЕ — Петя" in sections
-    assert "#2 " in sections["СООБЩЕНИЯ, НА КОТОРЫЕ ОТВЕТИЛИ"]
     recent = sections["ПОСЛЕДНЯЯ ПЕРЕПИСКА"]
     assert "Ты: а я говорил" in recent
-    assert "#1 " not in recent  # too old for the window; it lives in the personal history instead
-    # Messages 1-40 are all shown somewhere, so the new 50 and 51 are numbered #41 and #42.
-    assert "#41 " in sections["НОВОЕ"] and "↩#2: помнишь?" in sections["НОВОЕ"]
-    assert "#42 " in sections["НОВОЕ"] and "Иван[700000001]: бег не моё" in sections["НОВОЕ"]
-    assert body.endswith("ЗАДАЧА про #42")
-    assert (prompt.ids.real(41), prompt.ids.real(42)) == (50, 51)
+    assert "болтовня номер 33" not in recent  # the tail after the summary is over budget: the newest lines
+    # The timeline is numbered first: the window (34-40), then the new 50 and 51, then the rest (1 and 2).
+    assert recent.split("\n")[2].startswith("#1 ") and "болтовня номер 34" in recent.split("\n")[2]
+    assert "#8 " in sections["НОВОЕ"] and "↩#11: помнишь?" in sections["НОВОЕ"]
+    assert "#9 " in sections["НОВОЕ"] and "Иван[700000001]: бег не моё" in sections["НОВОЕ"]
+    assert "#11 " in sections["СООБЩЕНИЯ, НА КОТОРЫЕ ОТВЕТИЛИ"]
+    assert body.endswith("ЗАДАЧА про #9")
+    assert (prompt.ids.real(1), prompt.ids.real(8), prompt.ids.real(9), prompt.ids.real(11)) == (34, 50, 51, 2)
+    order = [body.index(title) for title in ("ПАМЯТЬ", "ПОСЛЕДНЯЯ", "ЧТО ПИСАЛИ", "СООБЩЕНИЯ, НА", "НОВОЕ")]
+    assert order == sorted(order)
+
+
+async def test_consecutive_batches_share_the_prompt_prefix(
+    tmp_path: Path, storage: Storage, formatter: LineFormatter
+) -> None:
+    """The provider caches the longest common prefix, which costs ~35x less than fresh input."""
+    settings = make_settings(tmp_path, recent_context_tokens=400)
+    for i in range(1, 30):
+        await storage.add_message(msg(i, f"болтовня номер {i}"))
+    await storage.set_summary(CHAT, "Иван обещал бегать по утрам.", 10, BASE_TS)
+    builder = ContextBuilder(storage, BotConfig(storage, settings), settings, BOT, formatter)
+
+    first_new = [msg(30, "а вот и я", user_id=IVAN, author="Vanya")]
+    await storage.add_message(first_new[0])
+    first = (await builder.for_reply(CHAT, first_new, lambda ids: "ЗАДАЧА")).messages[1]["content"]
+    second_new = [msg(31, "совсем другой человек", user_id=222, author="Маша")]
+    await storage.add_message(second_new[0])
+    second = (await builder.for_reply(CHAT, second_new, lambda ids: "ЗАДАЧА")).messages[1]["content"]
+
+    window = first[: first.index("\n\nНОВОЕ")]
+    assert "болтовня номер 11" in window and "болтовня номер 29" in window
+    assert second.startswith(window)
 
 
 async def test_messages_are_numbered_from_one_and_map_back(

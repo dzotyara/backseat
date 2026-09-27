@@ -40,6 +40,7 @@ def make_settings(tmp_path: Path, **overrides: object) -> CoreSettings:
         "debounce_seconds": 999,
         "addressed_debounce_seconds": 999,
         "max_batch_wait_seconds": 999,
+        "reply_freeze_seconds": 0.0,
     }
     values.update(overrides)
     return CoreSettings(_env_file=None, **values)  # type: ignore[arg-type]

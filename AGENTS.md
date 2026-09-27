@@ -43,12 +43,17 @@ pydantic-settings. User-facing docs are in README.md (Russian).
    anything unparseable is a SKIP. With `PRECHECK_CONTEXT_TOKENS` > 0 a cheap yes/no precheck on the
    last few lines (no memory, same system prompt) gates that full call: in a busy Discord channel it
    was ~300 full-context calls a day. While the bot is paused (web panel) batches are dropped, but the
-   messages are already stored and the summary is still maintained.
+   messages are already stored and the summary is still maintained. After every model-written message
+   the chat is frozen for `REPLY_FREEZE_SECONDS` (30): a call meanwhile gets the canned `FREEZE_REPLY`
+   (once per person, not stored), and unprompted comments wait.
 3. `context.py` builds the prompt: service rules + persona (system message), then ПАМЯТЬ ЧАТА
-   (summary), ЧТО ПИСАЛИ РАНЬШЕ (older messages of `FOCUS_USERS` and of the new messages' authors),
-   replied-to messages, ПОСЛЕДНЯЯ ПЕРЕПИСКА (within `RECENT_CONTEXT_TOKENS`), НОВОЕ, and the task.
-   Messages are numbered per prompt with `IdMap` (#1 = oldest shown): Discord ids are 19-digit
-   snowflakes, and the model must copy a number back to reply.
+   (summary), ПОСЛЕДНЯЯ ПЕРЕПИСКА (within `RECENT_CONTEXT_TOKENS`), ЧТО ПИСАЛИ РАНЬШЕ (older messages
+   of `FOCUS_USERS` and of the new messages' authors), replied-to messages, НОВОЕ, and the task.
+   The order serves the provider's prompt cache (cached input is ~35x cheaper): the window starts
+   right after the summary's last message, so between folds it only grows at the end, and everything
+   that changes per batch (personal histories, replied-to, НОВОЕ) comes after it. Messages are numbered
+   per prompt with `IdMap` — the window and НОВОЕ first, in order, then the rest — so the numbers in the
+   cached prefix stay put: Discord ids are 19-digit snowflakes, and the model must copy a number back.
 4. `summarizer.py` folds the oldest unsummarized chunk into the summary as soon as the tail exceeds
    the verbatim window. Each fold rewrites the whole summary, so the prompt spells out its current
    size: the model ignored the word limit, grew it to twice the size and got cut at max_tokens every

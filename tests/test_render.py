@@ -4,11 +4,11 @@ from backseat.render import IdMap, LineFormatter
 from tests.conftest import BASE_TS, IVAN, msg
 
 
-def test_id_map_numbers_messages_from_one_oldest_first() -> None:
+def test_id_map_numbers_messages_from_one_in_the_order_given() -> None:
     snowflake = 1_300_000_000_000_000_000
     ids = IdMap([snowflake + 20, snowflake + 10, snowflake + 20])
-    assert (ids.short(snowflake + 10), ids.short(snowflake + 20)) == (1, 2)
-    assert (ids.real(1), ids.real(2)) == (snowflake + 10, snowflake + 20)
+    assert (ids.short(snowflake + 20), ids.short(snowflake + 10)) == (1, 2)
+    assert (ids.real(1), ids.real(2)) == (snowflake + 20, snowflake + 10)
     assert ids.short(snowflake) is None
     assert ids.real(3) is None and ids.real(None) is None
 

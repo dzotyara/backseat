@@ -7,6 +7,7 @@ to reply. Otherwise the model may comment, react with an emoji, or stay silent.
 
 import asyncio
 import logging
+import math
 import random
 import re
 import time
@@ -21,6 +22,7 @@ from backseat.llm import Completion, LLMClient, LLMError
 from backseat.prompts import (
     ADDRESSED_TASK,
     FALLBACK_REPLIES,
+    FREEZE_REPLY,
     REACT_OPTION,
     REACTION_EMOJIS,
     UNPROMPTED_TASK,
@@ -50,6 +52,8 @@ class _ChatState:
     timer: asyncio.Task[None] | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     last_comment_at: float = float("-inf")
+    frozen_until: float = float("-inf")  # no model-written message before this (REPLY_FREEZE_SECONDS)
+    told_frozen: set[int] = field(default_factory=set)  # who already got "not ready" during this freeze
 
 
 def _unprompted_task(reactions_enabled: bool) -> tuple[str, tuple[str, ...]]:
@@ -158,8 +162,13 @@ class Responder:
         for item in batch:
             if item.addressed and item.message_id in by_id:
                 targets[item.user_id] = item.message_id
+        state = self._state(chat_id)
         for target_id in sorted(targets.values()):
             target = by_id[target_id]
+            left = state.frozen_until - self._clock()
+            if left > 0:
+                await self._tell_frozen(chat_id, target, left)
+                continue
             author = self._context.formatter.author(target)
             prompt = await self._context.for_reply(
                 chat_id,
@@ -178,7 +187,24 @@ class Responder:
             if not text:
                 text = random.choice(FALLBACK_REPLIES)
             await self.send(chat_id, text, reply_to=target_id, notify=True)
+            self._freeze(state)
             log.info("chat=%s answered message=%s", chat_id, target_id)
+
+    def _freeze(self, state: _ChatState) -> None:
+        state.frozen_until = self._clock() + self._settings.reply_freeze_seconds
+        state.told_frozen.clear()
+
+    async def _tell_frozen(self, chat_id: int, target: StoredMessage, left: float) -> None:
+        """A canned "not ready yet", once per person per freeze: no model call, and it is not stored,
+        so it neither shows up in later prompts nor restarts any cooldown."""
+        state = self._state(chat_id)
+        if target.user_id in state.told_frozen:
+            log.info("chat=%s frozen: message=%s ignored, its author was already told", chat_id, target.message_id)
+            return
+        state.told_frozen.add(target.user_id)
+        text = FREEZE_REPLY.format(seconds=math.ceil(left))
+        await self._transport.send(chat_id, text, reply_to=target.message_id, notify=True)
+        log.info("chat=%s frozen: told message=%s to wait %.0fs", chat_id, target.message_id, left)
 
     # --- not addressed: maybe comment or react ---
 
@@ -189,6 +215,9 @@ class Responder:
             return
         if self._clock() - state.last_comment_at < runtime.unprompted_cooldown_seconds:
             log.info("chat=%s skip: cooldown", chat_id)
+            return
+        if self._clock() < state.frozen_until:
+            log.info("chat=%s skip: frozen", chat_id)
             return
         messages = await self._storage.get_messages(chat_id, [item.message_id for item in batch])
         if not any(not message.is_bot for message in messages):
@@ -207,6 +236,7 @@ class Responder:
         target = prompt.ids.real(action.message_id)
         if action.kind == "reply" and target is not None:
             await self.send(chat_id, action.text, reply_to=target)
+            self._freeze(state)
         elif action.kind == "react" and target is not None:
             await self._transport.react(chat_id, target, action.emoji)
         log.info("chat=%s unprompted=%s target=%s model=%s", chat_id, action.kind, target, completion.model)

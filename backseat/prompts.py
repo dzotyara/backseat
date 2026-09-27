@@ -17,6 +17,9 @@ FALLBACK_REPLIES = (
     "Связь с космосом пропала, дай мне минуту.",
 )
 
+# Sent instead of an answer while the bot rests after its last one (REPLY_FREEZE_SECONDS).
+FREEZE_REPLY = "Ещё не готов ответить, дай мне {seconds} сек."
+
 SYSTEM_TEMPLATE = """\
 Ты — участник группового чата в {platform}. Кто ты и как себя ведёшь — в разделе ХАРАКТЕР в конце.
 К тебе обращаются по именам: {names} — и через @{username}.

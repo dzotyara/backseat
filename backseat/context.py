@@ -18,6 +18,9 @@ _HISTORY_FETCH = 300
 _PRECHECK_FETCH = 200
 _DIGEST_FETCH = 3000
 _DIGEST_TOKENS = 20000
+_RECENT = "ПОСЛЕДНЯЯ ПЕРЕПИСКА"
+_NEW = "НОВОЕ"
+_TIMELINE = (_RECENT, _NEW)
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,14 +63,14 @@ class ContextBuilder:
         first_new = min(message.message_id for message in new)
         candidates = await self._storage.messages_before(chat_id, first_new, _PRECHECK_FETCH)
         window = self.formatter.newest_within(candidates, self._settings.precheck_context_tokens)
-        sections = [("ПОСЛЕДНЯЯ ПЕРЕПИСКА", window)] if window else []
-        sections.append(("НОВОЕ", new))
+        sections = [(_RECENT, window)] if window else []
+        sections.append((_NEW, new))
         return await self._render(chat_id, sections, lambda ids: PRECHECK_TASK, memory=False)
 
     async def for_digest(self, chat_id: int, since_ts: int) -> Prompt:
         week = await self._storage.messages_since(chat_id, since_ts, _DIGEST_FETCH)
         picked = self.formatter.newest_within(week, _DIGEST_TOKENS)
-        sections = [("ПОСЛЕДНЯЯ ПЕРЕПИСКА", picked)] if picked else []
+        sections = [(_RECENT, picked)] if picked else []
         return await self._render(chat_id, sections, lambda ids: DIGEST_TASK)
 
     async def _render(
@@ -78,7 +81,11 @@ class ContextBuilder:
         *,
         memory: bool = True,
     ) -> Prompt:
-        ids = IdMap(message.message_id for _, messages in sections for message in messages)
+        # The timeline is numbered first, so a message keeps its number from one prompt to the next:
+        # the numbers are part of the cached prefix. Older and replied-to messages get the numbers after it.
+        timeline = [m.message_id for title, messages in sections if title in _TIMELINE for m in messages]
+        other = sorted(m.message_id for title, messages in sections if title not in _TIMELINE for m in messages)
+        ids = IdMap(timeline + other)
         parts = []
         summary = await self._storage.get_summary(chat_id) if memory else None
         if summary:
@@ -94,17 +101,27 @@ class ContextBuilder:
         )
 
     async def _sections(self, chat_id: int, new: list[StoredMessage]) -> list[tuple[str, list[StoredMessage]]]:
+        """Ordered for the provider's prompt cache: what stays the same from one batch to the next comes
+        first (the system prompt, the summary, the recent window), what changes per batch comes last."""
         settings = self._settings
         fmt = self.formatter
         new_ids = {message.message_id for message in new}
         first_new = min(new_ids)
 
+        # The window starts where the summary ends, so between folds it only grows at the end and the
+        # whole prefix up to it is cached. The summarizer keeps that tail within RECENT_CONTEXT_TOKENS;
+        # if it lags behind, fall back to the newest messages that fit.
+        summary = await self._storage.get_summary(chat_id)
         candidates = await self._storage.messages_before(chat_id, first_new, _RECENT_FETCH)
+        if summary:
+            tail = [message for message in candidates if message.message_id > summary.upto_message_id]
+            if sum(fmt.cost(message) for message in tail) <= settings.recent_context_tokens:
+                candidates = tail
         window = fmt.newest_within(candidates, settings.recent_context_tokens)
         window_start = window[0].message_id if window else first_new
         shown = new_ids | {message.message_id for message in window}
 
-        sections: list[tuple[str, list[StoredMessage]]] = []
+        sections: list[tuple[str, list[StoredMessage]]] = [(_RECENT, window)] if window else []
         # Older messages of the focus users (always) and of whoever wrote the new messages:
         # the material for "you said the opposite last week".
         budgets = {user_id: settings.focus_history_tokens for user_id in settings.focus_users}
@@ -122,7 +139,5 @@ class ContextBuilder:
         replied = await self._storage.get_messages(chat_id, replied_ids)
         if replied:
             sections.append(("СООБЩЕНИЯ, НА КОТОРЫЕ ОТВЕТИЛИ", replied))
-        if window:
-            sections.append(("ПОСЛЕДНЯЯ ПЕРЕПИСКА", window))
-        sections.append(("НОВОЕ", new))
+        sections.append((_NEW, new))
         return sections

@@ -43,7 +43,7 @@ class CoreSettings(BaseSettings):
     )
     # off | low | medium | high — chat replies don't need a model's hidden reasoning.
     reasoning: str = "off"
-    # OpenRouter hosts to try first, e.g. "Relace,Wafer". A preference, not a filter: the rest stay
+    # OpenRouter hosts to try first, e.g. "InferenceNet,Relace". A preference, not a filter: the rest stay
     # as a fallback. Empty = OpenRouter picks, and it picked hosts 6-8x pricier than the cheapest.
     providers: Annotated[list[str], NoDecode] = Field(default_factory=list)
     max_tokens: int = 1000
@@ -66,15 +66,18 @@ class CoreSettings(BaseSettings):
     max_batch_wait_seconds: float = 20.0
     max_batch_messages: int = 15
     unprompted_cooldown_seconds: float = 60.0
+    # After each model-written message the bot rests this long: a direct call meanwhile gets a canned
+    # "not ready yet" (once per person) instead of a paid answer. 0 = off.
+    reply_freeze_seconds: float = 30.0
     # Before a comment nobody asked for, first show the model only this many tokens of the latest chat and
     # ask yes/no; the full prompt with the chat's memory is paid for only on "yes". 0 = always the full prompt.
     precheck_context_tokens: int = 0
 
     # Rough token budgets for the prompt sections (1 token ~ 3 characters).
-    recent_context_tokens: int = 8000
-    focus_history_tokens: int = 2500
-    author_history_tokens: int = 1200
-    summary_chunk_tokens: int = 4000
+    recent_context_tokens: int = 5000
+    focus_history_tokens: int = 1500
+    author_history_tokens: int = 600
+    summary_chunk_tokens: int = 2500
     summary_max_words: int = 900
 
     reactions_enabled: bool = True

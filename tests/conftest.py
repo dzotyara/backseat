@@ -38,6 +38,7 @@ def make_settings(tmp_path: Path, **overrides: object) -> CoreSettings:
         "debounce_seconds": 0.0,
         "addressed_debounce_seconds": 0.0,
         "weekly_digest": False,
+        "reply_freeze_seconds": 0.0,
     }
     values.update(overrides)
     return CoreSettings(_env_file=None, **values)  # type: ignore[arg-type]

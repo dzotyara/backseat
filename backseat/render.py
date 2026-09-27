@@ -16,11 +16,12 @@ def estimate_tokens(text: str) -> int:
 
 
 class IdMap:
-    """Short numbers for the messages shown in one prompt, oldest first. Discord ids are
-    19-digit snowflakes: they waste tokens, and the model has to copy one back to reply."""
+    """Short numbers for the messages shown in one prompt, in the order given (duplicates keep their
+    first number). Discord ids are 19-digit snowflakes: they waste tokens, and the model has to copy
+    one back to reply."""
 
     def __init__(self, message_ids: Iterable[int]) -> None:
-        self._short = {real: short for short, real in enumerate(sorted(set(message_ids)), start=1)}
+        self._short = {real: short for short, real in enumerate(dict.fromkeys(message_ids), start=1)}
         self._real = {short: real for real, short in self._short.items()}
 
     def short(self, message_id: int) -> int | None:
