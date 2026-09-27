@@ -6,4 +6,10 @@ services:
     env_file:
       - .env
     volumes:
-      - ./prompt.txt:/app/prompt.txt:ro
+      - ./data:/app/data # SQLite memory: survives restarts and rebuilds
+      - ./prompts:/app/prompts:ro # default persona, editable without a rebuild
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

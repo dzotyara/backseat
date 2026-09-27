@@ -1,0 +1,110 @@
+from datetime import time
+from pathlib import Path
+from typing import Annotated, Any
+
+from pydantic import AliasChoices, Field, SecretStr, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+DEFAULT_MODELS = [
+    "deepseek/deepseek-v4.1-flash",
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+]
+
+
+def _split(value: Any) -> Any:
+    """Comma-separated env values -> list; lists pass through untouched."""
+    if isinstance(value, str):
+        return [part.strip() for part in value.split(",") if part.strip()]
+    return value
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        env_ignore_empty=True,  # `FOO=` in .env means "use the default", not ""
+        extra="ignore",  # old v1 variables (CONTEXT_WINDOW, GONKAGATE_*) are harmless
+        validate_by_name=True,
+        validate_by_alias=True,
+    )
+
+    telegram_bot_token: SecretStr
+    openrouter_api_key: SecretStr
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_app_name: str = "Backseat"
+    openrouter_site_url: str = ""
+
+    # Tried in order: the first one that answers wins. MODEL_NAME is the v1 name.
+    models: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: list(DEFAULT_MODELS),
+        validation_alias=AliasChoices("MODELS", "MODEL_NAME"),
+    )
+    # off | low | medium | high — chat replies don't need a model's hidden reasoning.
+    reasoning: str = "off"
+    max_tokens: int = 1000
+    request_timeout_seconds: float = 60.0
+
+    owner_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
+    # Empty = any chat. Set it so strangers can't add the bot and spend your credits.
+    allowed_chat_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
+    bot_names: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["бэксит", "ботяра"])
+    # "123456789:Иван,987654321:Петя" — fixed display name and a longer personal history.
+    focus_users: Annotated[dict[int, str], NoDecode] = Field(default_factory=dict)
+
+    persona_file: Path = Path("prompts/persona.md")
+    db_path: Path = Path("data/backseat.db")
+    timezone: str = "Europe/Moscow"
+
+    debounce_seconds: float = 5.0
+    addressed_debounce_seconds: float = 1.5
+    max_batch_wait_seconds: float = 20.0
+    max_batch_messages: int = 15
+    unprompted_cooldown_seconds: float = 60.0
+
+    # Rough token budgets for the prompt sections (1 token ~ 3 characters).
+    recent_context_tokens: int = 8000
+    focus_history_tokens: int = 2500
+    author_history_tokens: int = 1200
+    summary_chunk_tokens: int = 4000
+    summary_max_words: int = 900
+
+    reactions_enabled: bool = True
+    weekly_digest: bool = True
+    digest_weekday: int = Field(default=6, ge=0, le=6)  # Monday=0 ... Sunday=6
+    digest_time: time = time(20, 0)
+    digest_min_messages: int = 20
+
+    log_level: str = "INFO"
+
+    @field_validator("models", "bot_names", mode="before")
+    @classmethod
+    def _parse_str_list(cls, value: Any) -> Any:
+        return _split(value)
+
+    @field_validator("owner_ids", "allowed_chat_ids", mode="before")
+    @classmethod
+    def _parse_int_list(cls, value: Any) -> Any:
+        value = _split(value)
+        if isinstance(value, list):
+            return [int(item) for item in value]
+        return value
+
+    @field_validator("focus_users", mode="before")
+    @classmethod
+    def _parse_focus_users(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        users = {}
+        for part in _split(value):
+            user_id, _, name = part.partition(":")
+            users[int(user_id)] = name.strip() or user_id.strip()
+        return users
+
+    @field_validator("reasoning")
+    @classmethod
+    def _check_reasoning(cls, value: str) -> str:
+        value = value.strip().lower()
+        if value not in {"off", "low", "medium", "high"}:
+            raise ValueError("REASONING must be one of: off, low, medium, high")
+        return value
