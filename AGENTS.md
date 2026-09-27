@@ -42,8 +42,9 @@ User-facing docs are in README.md (Russian).
 - Keep `prompts.UNPROMPTED_TASK` and `replies.parse_action` in sync.
 - The persona lives in `prompts/persona.md`; `/prompt` overrides it bot-wide (`chat_settings` row with
   chat_id 0, see `bot_config.py`). `/prompt` works only for owners and only in private: the persona names
-  the roast target, so it must never be shown in the group. Everyone else gets silence, and the command
-  is absent from their menu (`handlers.register_commands`).
+  the roast target, so it must never be shown in the group. `/status` (spending, memory) is owner-only too.
+  Everyone else gets silence, and owner commands are absent from their menu and /help
+  (`handlers.OWNER_COMMANDS`, `handlers.register_commands`).
 - This repository is public: no secrets, server addresses or real Telegram ids in committed files.
   Real values belong in the server's `.env`.
 

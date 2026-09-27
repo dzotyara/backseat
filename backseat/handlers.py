@@ -28,13 +28,16 @@ log = logging.getLogger(__name__)
 BOT_COMMANDS = [
     BotCommand(command="help", description="Что умеет бот"),
     BotCommand(command="names", description="Имена, на которые бот откликается (/имена)"),
-    BotCommand(command="status", description="Модель, память и лимиты"),
     BotCommand(command="id", description="Узнать свой Telegram ID"),
     BotCommand(command="ping", description="Проверить, что бот жив"),
 ]
-# /prompt exists only for the owner and only in the private chat with the bot: the persona
-# says who gets roasted, so it must never be shown in the group.
-OWNER_COMMANDS = [BotCommand(command="prompt", description="Характер бота (/промпт)"), *BOT_COMMANDS]
+# Owner-only commands, shown only in the owner's private chat with the bot. For everyone else they
+# don't exist: /prompt says who gets roasted, /status shows spending.
+OWNER_COMMANDS = [
+    BotCommand(command="prompt", description="Характер бота (/промпт)"),
+    BotCommand(command="status", description="Модель, память и расходы"),
+    *BOT_COMMANDS,
+]
 
 HELP_TEXT = """\
 Я Бэксит v{version}: читаю чат, помню всю беседу и иногда вставляю пару слов.
@@ -42,7 +45,6 @@ HELP_TEXT = """\
 
 Команды:
 /names или /имена — на какие имена откликаюсь. Владелец меняет: /имена бэксит, ботяра
-/status — модель, память и лимиты
 /id — узнать свой Telegram ID
 /ping — проверить, что я жив"""
 
@@ -50,7 +52,8 @@ OWNER_HELP = """
 
 Только для тебя, здесь в личке:
 /prompt или /промпт — показать мой характер. Поменять: /промпт новый текст, \
-.txt-файлом с подписью /промпт или /промпт сброс"""
+.txt-файлом с подписью /промпт или /промпт сброс
+/status — модели, память по чатам, расходы и лимиты"""
 
 _GROUPS = F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP})
 _RESET_WORDS = {"сброс", "сбросить", "reset", "default"}
@@ -148,21 +151,34 @@ def create_router(svc: Services) -> Router:
             lines.append(f"ID этого чата: {message.chat.id}")
         await message.reply("\n".join(lines) or "Не вижу, кто ты.")
 
+    async def chat_title(bot: Bot, chat_id: int) -> str:
+        try:
+            chat = await bot.get_chat(chat_id)
+        except TelegramAPIError:
+            return str(chat_id)
+        return f"«{chat.title}»" if chat.title else str(chat_id)
+
     @router.message(Command("status", "статус", ignore_case=True))
-    async def cmd_status(message: Message) -> None:
-        if not chat_allowed(message):
-            return
-        chat_id = message.chat.id
+    async def cmd_status(message: Message, bot: Bot) -> None:
+        if not is_owner(message):
+            return  # for everyone else the command does not exist
         lines = [f"Бэксит v{__version__}", "Модели по порядку: " + " → ".join(svc.llm.models)]
         if svc.llm.last_model:
             lines.append(f"Последний ответ дала: {svc.llm.last_model}")
-        memory = f"Память чата: {await svc.storage.count_messages(chat_id)} сообщений"
-        summary = await svc.storage.get_summary(chat_id)
-        if summary:
-            memory += f", сводка обновлена {datetime.fromtimestamp(summary.updated_at, tz):%d.%m %H:%M}"
+        if message.chat.type == ChatType.PRIVATE:
+            # From the private chat, report on the group chats the bot lives in.
+            chats = svc.settings.allowed_chat_ids or await svc.storage.active_group_chats(0)
+            labels = [f"Память чата {await chat_title(bot, chat_id)}" for chat_id in chats]
         else:
-            memory += ", сводки пока нет"
-        lines.append(memory)
+            chats, labels = [message.chat.id], ["Память этого чата"]
+        for chat_id, label in zip(chats, labels, strict=True):
+            memory = f"{label}: {await svc.storage.count_messages(chat_id)} сообщений"
+            summary = await svc.storage.get_summary(chat_id)
+            if summary:
+                memory += f", сводка обновлена {datetime.fromtimestamp(summary.updated_at, tz):%d.%m %H:%M}"
+            else:
+                memory += ", сводки пока нет"
+            lines.append(memory)
         lines.append("Имена: " + ", ".join(await svc.bot_config.names()))
         info = await svc.llm.key_info()
         if info:

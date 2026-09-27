@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.base import BaseSession
-from aiogram.methods import GetFile, GetMe, SendDocument, SendMessage, SetMyCommands, TelegramMethod
+from aiogram.methods import GetChat, GetFile, GetMe, SendDocument, SendMessage, SetMyCommands, TelegramMethod
 from aiogram.types import Chat, File, Message, User
 
 from backseat.bot_config import BotConfig
@@ -38,6 +38,8 @@ class RecordingSession(BaseSession):
             return User(id=BOT.id, is_bot=True, first_name="Backseat", username=BOT.username)
         if isinstance(method, GetFile):
             return File(file_id=method.file_id, file_unique_id="u", file_path="documents/prompt.txt")
+        if isinstance(method, GetChat):
+            return SimpleNamespace(id=method.chat_id, title="Чат")
         if isinstance(method, SendMessage | SendDocument):
             return Message(
                 message_id=next(_ids),
@@ -222,31 +224,43 @@ async def test_long_prompt_is_shown_as_a_file(app: SimpleNamespace) -> None:
     assert len(app.session.documents()) == 1
 
 
-async def test_prompt_is_only_in_the_owners_menu_and_help(app: SimpleNamespace) -> None:
+async def test_owner_commands_are_only_in_the_owners_menu_and_help(app: SimpleNamespace) -> None:
     await register_commands(app.bot, [OWNER])
     public, owner = [m for m in app.session.requests if isinstance(m, SetMyCommands)]
     assert public.scope is None
-    assert "prompt" not in [c.command for c in public.commands]
+    assert {"prompt", "status"}.isdisjoint(c.command for c in public.commands)
     assert owner.scope.chat_id == OWNER
-    assert "prompt" in [c.command for c in owner.commands]
+    assert {"prompt", "status"} <= {c.command for c in owner.commands}
 
     await feed(app, "/help")
-    assert "/prompt" not in app.session.texts()[-1]
-    await feed(app, "/help", user_id=OWNER)  # the owner in the group: still nothing about the prompt
-    assert "/prompt" not in app.session.texts()[-1]
+    assert "/prompt" not in app.session.texts()[-1] and "/status" not in app.session.texts()[-1]
+    await feed(app, "/help", user_id=OWNER)  # the owner in the group: nothing private is advertised
+    assert "/prompt" not in app.session.texts()[-1] and "/status" not in app.session.texts()[-1]
     await feed(app, "/help", user_id=OWNER, chat_id=OWNER)
-    assert "/prompt" in app.session.texts()[-1]
+    assert "/prompt" in app.session.texts()[-1] and "/status" in app.session.texts()[-1]
 
 
-async def test_id_status_and_ping(app: SimpleNamespace) -> None:
+async def test_id_and_ping(app: SimpleNamespace) -> None:
     await feed(app, "/id", user_id=OWNER)
     assert app.session.texts()[-1] == f"Твой Telegram ID: {OWNER}\nID этого чата: {CHAT}"
-    await feed(app, "/status")
-    status = app.session.texts()[-1]
-    assert "Модели по порядку: paid/model → free/model:free" in status
-    assert "Бесплатные запросы сегодня: 3 из 50" in status
     await feed(app, "/ping@Backseatyara_bot")
     assert app.session.texts()[-1] == "pong"
+
+
+async def test_status_is_owner_only(app: SimpleNamespace) -> None:
+    await feed(app, "что-то в чате")
+    await feed(app, "/status")
+    await feed(app, "/статус", chat_id=IVAN)
+    assert app.session.texts() == []
+
+    await feed(app, "/status", user_id=OWNER)
+    in_group = app.session.texts()[-1]
+    assert "Модели по порядку: paid/model → free/model:free" in in_group
+    assert "Память этого чата: 1 сообщений, сводки пока нет" in in_group
+    assert "Бесплатные запросы сегодня: 3 из 50" in in_group
+
+    await feed(app, "/status", user_id=OWNER, chat_id=OWNER)
+    assert "Память чата «Чат»: 1 сообщений" in app.session.texts()[-1]
 
 
 async def test_foreign_chats_and_other_bots_are_ignored(app: SimpleNamespace) -> None:
