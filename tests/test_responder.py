@@ -310,10 +310,10 @@ async def test_calls_to_the_bot_skip_the_precheck(tmp_path: Path, storage: Stora
     await responder.shutdown()
 
 
-async def test_freeze_after_an_answer_says_not_ready_without_a_model_call(tmp_path: Path, storage: Storage) -> None:
+async def test_freeze_is_per_person_and_says_not_ready_without_a_model_call(tmp_path: Path, storage: Storage) -> None:
     settings = make_settings(tmp_path, reply_freeze_seconds=30, **SLOW)
     now = [1000.0]
-    llm, transport = FakeLLM("Держи ответ.", "Держи ответ."), FakeTransport()
+    llm, transport = FakeLLM("Ивану.", "Пете.", "Ивану снова."), FakeTransport()
     responder = make_responder(settings, storage, llm, transport, clock=lambda: now[0])
 
     async def call(message_id: int, user_id: int = IVAN) -> None:
@@ -323,34 +323,31 @@ async def test_freeze_after_an_answer_says_not_ready_without_a_model_call(tmp_pa
 
     await call(1)
     now[0] += 10
-    await call(2)  # 20 s of the freeze left
-    await call(3)  # the same person again: already told, silence
-    await call(4, user_id=PETYA)  # someone else is told too
+    await call(2)  # 20 s of Ivan's freeze left
+    await call(3)  # Ivan again: already told, silence
+    await call(4, user_id=PETYA)  # Petya has no freeze of his own: a real answer
     now[0] += 20
-    await call(5)  # the freeze is over
+    await call(5)  # Ivan's freeze is over
 
     assert [(s.reply_to, s.text) for s in transport.sent] == [
-        (1, "Держи ответ."),
+        (1, "Ивану."),
         (2, "Ещё не готов ответить, дай мне 20 сек."),
-        (4, "Ещё не готов ответить, дай мне 20 сек."),
-        (5, "Держи ответ."),
+        (4, "Пете."),
+        (5, "Ивану снова."),
     ]
-    assert len(llm.calls) == 2
+    assert len(llm.calls) == 3
     assert await storage.get_message(CHAT, 10_002) is None  # "not ready" never reaches later prompts
     await responder.shutdown()
 
 
-async def test_two_callers_in_one_batch_get_one_answer_and_one_wait(tmp_path: Path, storage: Storage) -> None:
+async def test_two_callers_in_one_batch_are_both_answered(tmp_path: Path, storage: Storage) -> None:
     settings = make_settings(tmp_path, reply_freeze_seconds=30, **SLOW)
-    llm, transport = FakeLLM("Держи ответ."), FakeTransport()
+    llm, transport = FakeLLM("Ивану.", "Пете."), FakeTransport()
     responder = make_responder(settings, storage, llm, transport)
     await add(storage, 1, "ботяра, ты тут?")
     await add(storage, 2, "ботяра, и мне ответь", user_id=PETYA)
     responder.enqueue(CHAT, Incoming(1, IVAN, addressed=True, trivial=False))
     responder.enqueue(CHAT, Incoming(2, PETYA, addressed=True, trivial=False))
     await responder.process(CHAT)
-    assert [(s.reply_to, s.text) for s in transport.sent] == [
-        (1, "Держи ответ."),
-        (2, "Ещё не готов ответить, дай мне 30 сек."),
-    ]
+    assert [(s.reply_to, s.text) for s in transport.sent] == [(1, "Ивану."), (2, "Пете.")]
     await responder.shutdown()

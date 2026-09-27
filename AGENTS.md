@@ -43,9 +43,9 @@ pydantic-settings. User-facing docs are in README.md (Russian).
    anything unparseable is a SKIP. With `PRECHECK_CONTEXT_TOKENS` > 0 a cheap yes/no precheck on the
    last few lines (no memory, same system prompt) gates that full call: in a busy Discord channel it
    was ~300 full-context calls a day. While the bot is paused (web panel) batches are dropped, but the
-   messages are already stored and the summary is still maintained. After every model-written message
-   the chat is frozen for `REPLY_FREEZE_SECONDS` (30): a call meanwhile gets the canned `FREEZE_REPLY`
-   (once per person, not stored), and unprompted comments wait.
+   messages are already stored and the summary is still maintained. After the bot answers someone
+   (addressed or unprompted), that user is frozen for `REPLY_FREEZE_SECONDS` (30), each on their own
+   timer: their call meanwhile gets the canned `FREEZE_REPLY` (once, not stored).
 3. `context.py` builds the prompt: service rules + persona (system message), then ПАМЯТЬ ЧАТА
    (summary), ПОСЛЕДНЯЯ ПЕРЕПИСКА (within `RECENT_CONTEXT_TOKENS`), ЧТО ПИСАЛИ РАНЬШЕ (older messages
    of `FOCUS_USERS` and of the new messages' authors), replied-to messages, НОВОЕ, and the task.

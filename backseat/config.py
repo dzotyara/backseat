@@ -66,8 +66,8 @@ class CoreSettings(BaseSettings):
     max_batch_wait_seconds: float = 20.0
     max_batch_messages: int = 15
     unprompted_cooldown_seconds: float = 60.0
-    # After each model-written message the bot rests this long: a direct call meanwhile gets a canned
-    # "not ready yet" (once per person) instead of a paid answer. 0 = off.
+    # After the bot answers someone, that person waits this long: their call meanwhile gets a canned
+    # "not ready yet" (once) instead of a paid answer. Everyone has their own timer. 0 = off.
     reply_freeze_seconds: float = 30.0
     # Before a comment nobody asked for, first show the model only this many tokens of the latest chat and
     # ask yes/no; the full prompt with the chat's memory is paid for only on "yes". 0 = always the full prompt.
