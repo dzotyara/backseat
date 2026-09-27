@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from backseat.bot_config import BotConfig
 from backseat.config import CoreSettings
-from backseat.prompts import DIGEST_TASK, PARTICIPANT_LINE, PRECHECK_TASK, SYSTEM_TEMPLATE
+from backseat.prompts import DIGEST_TASK, PRECHECK_TASK, SYSTEM_TEMPLATE, participant_lines
 from backseat.render import IdMap, LineFormatter
 from backseat.storage import Storage, StoredMessage
 from backseat.triggers import BotIdentity
@@ -42,14 +42,11 @@ class ContextBuilder:
         self.formatter = formatter
 
     async def system_prompt(self) -> str:
-        participants = "".join(
-            PARTICIPANT_LINE.format(name=name, user_id=user_id) for user_id, name in self._settings.focus_users.items()
-        )
         return SYSTEM_TEMPLATE.format(
-            platform=self._me.platform,
+            platform=self._bot_config.platform,
             names=", ".join(await self._bot_config.names()) or "—",
             username=self._me.username,
-            participants=participants,
+            participants=participant_lines(self._settings.focus_users),
             persona=await self._bot_config.persona(),
         )
 

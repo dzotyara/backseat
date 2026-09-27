@@ -25,13 +25,15 @@ def make_responder(
     after_batch: object = None,
 ) -> Responder:
     formatter = LineFormatter(ZoneInfo(settings.timezone), settings.focus_users)
-    context = ContextBuilder(storage, BotConfig(storage, settings), settings, BOT, formatter)
+    bot_config = BotConfig(storage, settings)
+    context = ContextBuilder(storage, bot_config, settings, BOT, formatter)
     return Responder(
         transport=transport,
         storage=storage,
         llm=llm,  # type: ignore[arg-type]
         context=context,
         settings=settings,
+        bot_config=bot_config,
         me=BOT,
         after_batch=after_batch,  # type: ignore[arg-type]
         clock=clock or (lambda: 1000.0),

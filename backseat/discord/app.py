@@ -51,9 +51,7 @@ class BackseatClient(discord.Client):
         self.transport = DiscordTransport(self)
         self.bot_config = BotConfig(storage, settings, platform=self.transport.platform)
         self.formatter = LineFormatter(ZoneInfo(settings.timezone), settings.focus_users)
-        self.summarizer = Summarizer(
-            storage, llm, settings, self.formatter, platform=self.transport.platform, bot_config=self.bot_config
-        )
+        self.summarizer = Summarizer(storage, llm, settings, self.formatter, bot_config=self.bot_config)
         self.services: Services | None = None  # set in setup_hook, once the bot knows who it is
         self._background: set[asyncio.Task[None]] = set()
         self._catching_up: set[int] = set()  # channels the catch-up is loading and folding right now
@@ -63,7 +61,7 @@ class BackseatClient(discord.Client):
         # discord.py has logged in and fetched the application info by now, and no event has been
         # dispatched yet: wire everything here, so no handler ever sees a half-built bot.
         assert self.user is not None
-        me = BotIdentity(id=self.user.id, username=self.user.display_name, platform=self.transport.platform)
+        me = BotIdentity(id=self.user.id, username=self.user.display_name)
         context = ContextBuilder(self.storage, self.bot_config, self.settings, me, self.formatter)
         responder = Responder(
             transport=self.transport,
@@ -71,9 +69,9 @@ class BackseatClient(discord.Client):
             llm=self.llm,
             context=context,
             settings=self.settings,
+            bot_config=self.bot_config,
             me=me,
             after_batch=self.after_batch,
-            bot_config=self.bot_config,
         )
         # Always built and scheduled: /digest writes its posts, and the weekly switch lives in the web
         # panel, checked at posting time.

@@ -226,7 +226,8 @@ async def test_setup_wires_the_bot_before_any_event(logged_in: BackseatClient, m
     syncs = await set_up(logged_in, monkeypatch)
     svc = logged_in.services
     assert svc is not None
-    assert svc.me == BotIdentity(id=BOT_ID, username="Бэксит", platform="Discord")
+    assert svc.me == BotIdentity(id=BOT_ID, username="Бэксит")
+    assert svc.bot_config.platform == "Discord"
     assert svc.owners == {OWNER, APP_OWNER}
     assert isinstance(svc.responder, Responder)
     commands = {command.name for command in logged_in.tree.get_commands()}

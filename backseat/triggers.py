@@ -22,7 +22,6 @@ _LAUGH_RE = re.compile(r"(?:[ах]{3,}|х[аы]+|[xх]+[aа]+[xх]*|л+о+л+|к
 class BotIdentity:
     id: int
     username: str  # what follows "@" when people mention the bot
-    platform: str = "Telegram"
 
 
 class Address(Enum):
