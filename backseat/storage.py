@@ -119,6 +119,27 @@ class Storage:
         )
         await self.db.commit()
 
+    async def add_messages(self, messages: list[StoredMessage]) -> None:
+        """add_message for many rows in one transaction, e.g. a channel's history."""
+        await self.db.executemany(
+            f"INSERT INTO messages ({_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT (chat_id, message_id) DO UPDATE SET text = excluded.text",
+            [
+                (
+                    message.chat_id,
+                    message.message_id,
+                    message.user_id,
+                    message.author,
+                    message.text,
+                    message.reply_to,
+                    int(message.is_bot),
+                    message.created_at,
+                )
+                for message in messages
+            ],
+        )
+        await self.db.commit()
+
     async def edit_message(self, chat_id: int, message_id: int, text: str, edited_at: int) -> None:
         await self.db.execute(
             "UPDATE messages SET text = ?, edited_at = ? WHERE chat_id = ? AND message_id = ?",
