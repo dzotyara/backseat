@@ -1,10 +1,8 @@
-"""Telegram message -> remembered text, and stored messages -> transcript lines for the model."""
+"""How stored messages look to the model: "#n HH:MM Author[id] ↩#m: text" lines grouped by day."""
 
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 from zoneinfo import ZoneInfo
-
-from aiogram.types import Message
 
 from backseat.storage import StoredMessage
 
@@ -17,57 +15,22 @@ def estimate_tokens(text: str) -> int:
     return len(text) // 3 + 1
 
 
-def _duration(seconds: int | None) -> str:
-    seconds = seconds or 0
-    return f"{seconds // 60}:{seconds % 60:02d}"
+class IdMap:
+    """Short numbers for the messages shown in one prompt, oldest first. Discord ids are
+    19-digit snowflakes: they waste tokens, and the model has to copy one back to reply."""
 
+    def __init__(self, message_ids: Iterable[int]) -> None:
+        self._short = {real: short for short, real in enumerate(sorted(set(message_ids)), start=1)}
+        self._real = {short: real for real, short in self._short.items()}
 
-def describe_media(message: Message) -> str | None:
-    # Animation messages also carry `document`, so check it first.
-    if message.sticker:
-        return f"[стикер {message.sticker.emoji}]" if message.sticker.emoji else "[стикер]"
-    if message.animation:
-        return "[гифка]"
-    if message.photo:
-        return "[фото]"
-    if message.video:
-        return "[видео]"
-    if message.video_note:
-        return "[кружок]"
-    if message.voice:
-        return f"[голосовое {_duration(message.voice.duration)}]"
-    if message.audio:
-        title = " — ".join(part for part in (message.audio.performer, message.audio.title) if part)
-        return f"[аудио {title}]" if title else "[аудио]"
-    if message.document:
-        name = message.document.file_name
-        return f"[файл {name}]" if name else "[файл]"
-    if message.poll:
-        options = " / ".join(option.text for option in message.poll.options)
-        return f"[опрос: {message.poll.question} — {options}]"
-    if message.dice:
-        return f"[{message.dice.emoji} выпало {message.dice.value}]"
-    if message.location or message.venue:
-        return "[геолокация]"
-    if message.contact:
-        return "[контакт]"
-    return None
+    def short(self, message_id: int) -> int | None:
+        return self._short.get(message_id)
 
-
-def describe_message(message: Message) -> str:
-    """What we remember about a message. Empty for service messages (joins, pins, ...)."""
-    media = describe_media(message)
-    text = message.text or message.caption
-    if not media and not text:
-        return ""
-    parts = ["[переслано]"] if message.forward_origin else []
-    parts += [part for part in (media, text) if part]
-    return " ".join(parts)
+    def real(self, short: int | None) -> int | None:
+        return None if short is None else self._real.get(short)
 
 
 class LineFormatter:
-    """Renders "#id HH:MM Author[user_id] ↩#reply: text" lines, grouped by day."""
-
     def __init__(self, tz: ZoneInfo, aliases: Mapping[int, str], max_chars: int = 1500) -> None:
         self._tz = tz
         self._aliases = aliases
@@ -79,19 +42,27 @@ class LineFormatter:
         name = self._aliases.get(message.user_id, message.author)
         return f"{name}[{message.user_id}]"
 
-    def line(self, message: StoredMessage) -> str:
-        local = datetime.fromtimestamp(message.created_at, self._tz)
-        reply = f" ↩#{message.reply_to}" if message.reply_to else ""
+    def _text(self, message: StoredMessage) -> str:
         text = " / ".join(part.strip() for part in message.text.splitlines() if part.strip())
-        if len(text) > self._max_chars:
-            text = text[: self._max_chars - 1] + "…"
-        return f"#{message.message_id} {local:%H:%M} {self.author(message)}{reply}: {text}"
+        return text if len(text) <= self._max_chars else text[: self._max_chars - 1] + "…"
+
+    def line(self, message: StoredMessage, ids: IdMap) -> str:
+        local = datetime.fromtimestamp(message.created_at, self._tz)
+        reply = ""
+        if message.reply_to is not None:
+            target = ids.short(message.reply_to)
+            reply = f" ↩#{target}" if target else " ↩"  # a reply to something not shown
+        return f"#{ids.short(message.message_id)} {local:%H:%M} {self.author(message)}{reply}: {self._text(message)}"
+
+    def cost(self, message: StoredMessage) -> int:
+        """Token estimate of a line, without needing its number yet."""
+        return estimate_tokens(f"#000 00:00 {self.author(message)} ↩#000: {self._text(message)}")
 
     def day_header(self, timestamp: int) -> str:
         local = datetime.fromtimestamp(timestamp, self._tz)
         return f"— {local:%d.%m.%Y} ({WEEKDAYS[local.weekday()]}) —"
 
-    def lines(self, messages: Iterable[StoredMessage]) -> str:
+    def lines(self, messages: Iterable[StoredMessage], ids: IdMap) -> str:
         out: list[str] = []
         last_day = None
         for message in messages:
@@ -99,7 +70,7 @@ class LineFormatter:
             if day != last_day:
                 out.append(self.day_header(message.created_at))
                 last_day = day
-            out.append(self.line(message))
+            out.append(self.line(message, ids))
         return "\n".join(out)
 
     def newest_within(self, messages: list[StoredMessage], budget: int) -> list[StoredMessage]:
@@ -107,7 +78,7 @@ class LineFormatter:
         picked: list[StoredMessage] = []
         used = 0
         for message in reversed(messages):
-            cost = estimate_tokens(self.line(message))
+            cost = self.cost(message)
             if used + cost > budget:
                 break
             picked.append(message)

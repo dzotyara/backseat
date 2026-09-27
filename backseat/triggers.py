@@ -1,11 +1,9 @@
-"""Is a message addressed to the bot, and is it worth an unprompted comment at all?"""
+"""Platform-independent parts of "is this message for the bot": its names and empty chatter."""
 
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
-
-from aiogram.types import Message
 
 _VOWELS = set("аеёиоуыэюяьйaeiouy")
 
@@ -23,7 +21,8 @@ _LAUGH_RE = re.compile(r"(?:[ах]{3,}|х[аы]+|[xх]+[aа]+[xх]*|л+о+л+|к
 @dataclass(frozen=True, slots=True)
 class BotIdentity:
     id: int
-    username: str
+    username: str  # what follows "@" when people mention the bot
+    platform: str = "Telegram"
 
 
 class Address(Enum):
@@ -50,34 +49,9 @@ def compile_names(names: Iterable[str]) -> re.Pattern[str] | None:
     return re.compile(r"(?<!\w)(?:" + "|".join(alternatives) + r")(?!\w)", re.IGNORECASE)
 
 
-def find_address(message: Message, me: BotIdentity, names: re.Pattern[str] | None) -> Address | None:
-    text = message.text or message.caption or ""
-    handle = f"@{me.username}".lower() if me.username else None
-    for entity in message.entities or message.caption_entities or []:
-        if entity.type == "mention" and handle and entity.extract_from(text).lower() == handle:
-            return Address.MENTION
-        if entity.type == "text_mention" and entity.user and entity.user.id == me.id:
-            return Address.MENTION
-    if handle and handle in text.lower():
-        return Address.MENTION
-    if names and names.search(text):
-        return Address.NAME
-    reply = message.reply_to_message
-    if reply and reply.from_user and reply.from_user.id == me.id:
-        return Address.REPLY
-    return None
-
-
 def is_trivial_text(text: str) -> bool:
+    """Nothing to comment on: "ок", "ахахах", "да)", emoji only."""
     words = re.findall(r"\w+|[+()\-]+", text.lower())
     if not words:
         return True  # only emoji or punctuation
     return all(word in _TRIVIAL_WORDS or _LAUGH_RE.fullmatch(word) for word in words)
-
-
-def is_trivial(message: Message) -> bool:
-    """Nothing to comment on: a bare sticker/photo, "ок", "ахахах", "да)"."""
-    if message.poll:
-        return False
-    text = message.text or message.caption
-    return not text or is_trivial_text(text)

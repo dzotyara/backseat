@@ -1,9 +1,12 @@
 """Assembles what the model sees: persona + memory + personal history + recent chat + the new messages."""
 
+from collections.abc import Callable
+from dataclasses import dataclass
+
 from backseat.bot_config import BotConfig
-from backseat.config import Settings
+from backseat.config import CoreSettings
 from backseat.prompts import DIGEST_TASK, PARTICIPANT_LINE, SYSTEM_TEMPLATE
-from backseat.render import LineFormatter
+from backseat.render import IdMap, LineFormatter
 from backseat.storage import Storage, StoredMessage
 from backseat.triggers import BotIdentity
 
@@ -16,12 +19,18 @@ _DIGEST_FETCH = 3000
 _DIGEST_TOKENS = 20000
 
 
+@dataclass(frozen=True, slots=True)
+class Prompt:
+    messages: ChatMessages
+    ids: IdMap  # message numbers in the prompt -> real message ids
+
+
 class ContextBuilder:
     def __init__(
         self,
         storage: Storage,
         bot_config: BotConfig,
-        settings: Settings,
+        settings: CoreSettings,
         me: BotIdentity,
         formatter: LineFormatter,
     ) -> None:
@@ -36,37 +45,42 @@ class ContextBuilder:
             PARTICIPANT_LINE.format(name=name, user_id=user_id) for user_id, name in self._settings.focus_users.items()
         )
         return SYSTEM_TEMPLATE.format(
+            platform=self._me.platform,
             names=", ".join(await self._bot_config.names()) or "—",
             username=self._me.username,
             participants=participants,
             persona=await self._bot_config.persona(),
         )
 
-    async def for_reply(self, chat_id: int, new: list[StoredMessage], task: str) -> ChatMessages:
-        sections = await self._sections(chat_id, new)
-        sections.append(task)
-        return [
-            {"role": "system", "content": await self.system_prompt()},
-            {"role": "user", "content": "\n\n".join(sections)},
-        ]
+    async def for_reply(self, chat_id: int, new: list[StoredMessage], task: Callable[[IdMap], str]) -> Prompt:
+        """`task` gets the numbering so it can point at a message ("#3")."""
+        return await self._render(chat_id, await self._sections(chat_id, new), task)
 
-    async def for_digest(self, chat_id: int, since_ts: int) -> ChatMessages:
+    async def for_digest(self, chat_id: int, since_ts: int) -> Prompt:
         week = await self._storage.messages_since(chat_id, since_ts, _DIGEST_FETCH)
-        sections = await self._memory_section(chat_id)
         picked = self.formatter.newest_within(week, _DIGEST_TOKENS)
-        if picked:
-            sections.append("ПОСЛЕДНЯЯ ПЕРЕПИСКА:\n" + self.formatter.lines(picked))
-        sections.append(DIGEST_TASK)
-        return [
-            {"role": "system", "content": await self.system_prompt()},
-            {"role": "user", "content": "\n\n".join(sections)},
-        ]
+        sections = [("ПОСЛЕДНЯЯ ПЕРЕПИСКА", picked)] if picked else []
+        return await self._render(chat_id, sections, lambda ids: DIGEST_TASK)
 
-    async def _memory_section(self, chat_id: int) -> list[str]:
+    async def _render(
+        self, chat_id: int, sections: list[tuple[str, list[StoredMessage]]], task: Callable[[IdMap], str]
+    ) -> Prompt:
+        ids = IdMap(message.message_id for _, messages in sections for message in messages)
+        parts = []
         summary = await self._storage.get_summary(chat_id)
-        return [f"ПАМЯТЬ ЧАТА:\n{summary.text}"] if summary else []
+        if summary:
+            parts.append(f"ПАМЯТЬ ЧАТА:\n{summary.text}")
+        parts += [f"{title}:\n{self.formatter.lines(messages, ids)}" for title, messages in sections]
+        parts.append(task(ids))
+        return Prompt(
+            messages=[
+                {"role": "system", "content": await self.system_prompt()},
+                {"role": "user", "content": "\n\n".join(parts)},
+            ],
+            ids=ids,
+        )
 
-    async def _sections(self, chat_id: int, new: list[StoredMessage]) -> list[str]:
+    async def _sections(self, chat_id: int, new: list[StoredMessage]) -> list[tuple[str, list[StoredMessage]]]:
         settings = self._settings
         fmt = self.formatter
         new_ids = {message.message_id for message in new}
@@ -77,8 +91,7 @@ class ContextBuilder:
         window_start = window[0].message_id if window else first_new
         shown = new_ids | {message.message_id for message in window}
 
-        sections = await self._memory_section(chat_id)
-
+        sections: list[tuple[str, list[StoredMessage]]] = []
         # Older messages of the focus users (always) and of whoever wrote the new messages:
         # the material for "you said the opposite last week".
         budgets = {user_id: settings.focus_history_tokens for user_id in settings.focus_users}
@@ -90,14 +103,13 @@ class ContextBuilder:
             picked = fmt.newest_within(older, budget)
             if picked:
                 name = settings.focus_users.get(user_id) or picked[-1].author
-                sections.append(f"ЧТО ПИСАЛИ РАНЬШЕ — {name}:\n" + fmt.lines(picked))
+                sections.append((f"ЧТО ПИСАЛИ РАНЬШЕ — {name}", picked))
 
         replied_ids = sorted({m.reply_to for m in new if m.reply_to is not None} - shown)
         replied = await self._storage.get_messages(chat_id, replied_ids)
         if replied:
-            sections.append("СООБЩЕНИЯ, НА КОТОРЫЕ ОТВЕТИЛИ:\n" + fmt.lines(replied))
-
+            sections.append(("СООБЩЕНИЯ, НА КОТОРЫЕ ОТВЕТИЛИ", replied))
         if window:
-            sections.append("ПОСЛЕДНЯЯ ПЕРЕПИСКА:\n" + fmt.lines(window))
-        sections.append("НОВОЕ:\n" + fmt.lines(new))
+            sections.append(("ПОСЛЕДНЯЯ ПЕРЕПИСКА", window))
+        sections.append(("НОВОЕ", new))
         return sections

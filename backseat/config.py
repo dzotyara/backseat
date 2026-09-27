@@ -19,7 +19,9 @@ def _split(value: Any) -> Any:
     return value
 
 
-class Settings(BaseSettings):
+class CoreSettings(BaseSettings):
+    """Everything the platform-independent core needs; each platform adds its own token."""
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -29,7 +31,6 @@ class Settings(BaseSettings):
         validate_by_alias=True,
     )
 
-    telegram_bot_token: SecretStr
     openrouter_api_key: SecretStr
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_app_name: str = "Backseat"
@@ -46,7 +47,8 @@ class Settings(BaseSettings):
     request_timeout_seconds: float = 60.0
 
     owner_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
-    # Empty = any chat. Set it so strangers can't add the bot and spend your credits.
+    # Telegram group ids or Discord channel ids. Empty = any chat.
+    # Set it so strangers can't add the bot and spend your credits.
     allowed_chat_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
     bot_names: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["бэксит", "ботяра"])
     # "123456789:Иван,987654321:Петя" — fixed display name and a longer personal history.

@@ -10,15 +10,9 @@ import logging
 import random
 import time
 from collections.abc import Awaitable, Callable
-from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 
-from aiogram import Bot
-from aiogram.exceptions import TelegramAPIError
-from aiogram.types import ReactionTypeEmoji, ReplyParameters
-from aiogram.utils.chat_action import ChatActionSender
-
-from backseat.config import Settings
+from backseat.config import CoreSettings
 from backseat.context import ContextBuilder
 from backseat.llm import LLMClient, LLMError
 from backseat.prompts import (
@@ -30,11 +24,10 @@ from backseat.prompts import (
 )
 from backseat.replies import clean_reply, parse_action, split_message
 from backseat.storage import Storage, StoredMessage
+from backseat.transport import Sent, Transport
 from backseat.triggers import BotIdentity
 
 log = logging.getLogger(__name__)
-
-TypingFactory = Callable[[int], AbstractAsyncContextManager[object]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,24 +51,22 @@ class Responder:
     def __init__(
         self,
         *,
-        bot: Bot,
+        transport: Transport,
         storage: Storage,
         llm: LLMClient,
         context: ContextBuilder,
-        settings: Settings,
+        settings: CoreSettings,
         me: BotIdentity,
         after_batch: Callable[[int], Awaitable[None]] | None = None,
-        typing: TypingFactory | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        self._bot = bot
+        self._transport = transport
         self._storage = storage
         self._llm = llm
         self._context = context
         self._settings = settings
         self._me = me
         self._after_batch = after_batch
-        self._typing = typing or (lambda chat_id: ChatActionSender.typing(bot=bot, chat_id=chat_id))
         self._clock = clock
         self._states: dict[int, _ChatState] = {}
         self._background: set[asyncio.Task[None]] = set()
@@ -152,18 +143,24 @@ class Responder:
                 targets[item.user_id] = item.message_id
         for target_id in sorted(targets.values()):
             target = by_id[target_id]
-            task = ADDRESSED_TASK.format(message_id=target_id, author=self._context.formatter.author(target))
-            prompt = await self._context.for_reply(chat_id, messages, task)
+            author = self._context.formatter.author(target)
+            prompt = await self._context.for_reply(
+                chat_id,
+                messages,
+                lambda ids, target_id=target_id, author=author: ADDRESSED_TASK.format(
+                    message_id=ids.short(target_id), author=author
+                ),
+            )
             text = ""
-            async with self._typing(chat_id):
+            async with self._transport.typing(chat_id):
                 try:
-                    completion = await self._llm.complete(prompt)
+                    completion = await self._llm.complete(prompt.messages)
                     text = clean_reply(completion.text)
                 except LLMError as exc:
                     log.error("chat=%s every model failed for an addressed message: %s", chat_id, exc)
             if not text:
                 text = random.choice(FALLBACK_REPLIES)
-            await self.send(chat_id, text, reply_to=target_id)
+            await self.send(chat_id, text, reply_to=target_id, notify=True)
             log.info("chat=%s answered message=%s", chat_id, target_id)
 
     # --- not addressed: maybe comment or react ---
@@ -177,54 +174,49 @@ class Responder:
             log.info("chat=%s skip: cooldown", chat_id)
             return
         messages = await self._storage.get_messages(chat_id, [item.message_id for item in batch])
-        valid_ids = [message.message_id for message in messages if not message.is_bot]
-        if not valid_ids:
+        if not any(not message.is_bot for message in messages):
             return
-        prompt = await self._context.for_reply(chat_id, messages, self._unprompted_task)
+        prompt = await self._context.for_reply(chat_id, messages, lambda ids: self._unprompted_task)
         try:
-            completion = await self._llm.complete(prompt)
+            completion = await self._llm.complete(prompt.messages)
         except LLMError as exc:
             log.warning("chat=%s unprompted comment skipped, every model failed: %s", chat_id, exc)
             return
-        action = parse_action(completion.text, valid_ids, self._emojis)
-        if action.kind == "reply":
-            await self.send(chat_id, action.text, reply_to=action.message_id)
-        elif action.kind == "react" and action.message_id is not None:
-            await self._react(chat_id, action.message_id, action.emoji)
-        log.info("chat=%s unprompted=%s target=%s model=%s", chat_id, action.kind, action.message_id, completion.model)
+        numbers = [prompt.ids.short(message.message_id) for message in messages if not message.is_bot]
+        action = parse_action(completion.text, [n for n in numbers if n is not None], self._emojis)
+        target = prompt.ids.real(action.message_id)
+        if action.kind == "reply" and target is not None:
+            await self.send(chat_id, action.text, reply_to=target)
+        elif action.kind == "react" and target is not None:
+            await self._transport.react(chat_id, target, action.emoji)
+        log.info("chat=%s unprompted=%s target=%s model=%s", chat_id, action.kind, target, completion.model)
 
     # --- output ---
 
-    async def send(self, chat_id: int, text: str, reply_to: int | None = None) -> bool:
+    async def send(self, chat_id: int, text: str, reply_to: int | None = None, notify: bool = False) -> bool:
         """Post a message (split if too long), remember it as the bot's own, restart the cooldown."""
-        reply = ReplyParameters(message_id=reply_to, allow_sending_without_reply=True) if reply_to else None
-        for chunk in split_message(text):
-            try:
-                sent = await self._bot.send_message(chat_id, chunk, reply_parameters=reply)
-            except TelegramAPIError:
-                log.exception("chat=%s failed to send a message", chat_id)
-                return False
-            await self._storage.add_message(
-                StoredMessage(
-                    chat_id=chat_id,
-                    message_id=sent.message_id,
-                    user_id=self._me.id,
-                    author=self._me.username or "bot",
-                    text=chunk,
-                    reply_to=reply_to if reply else None,
-                    is_bot=True,
-                    created_at=int(sent.date.timestamp()),
-                )
+        for index, chunk in enumerate(split_message(text, self._transport.max_length)):
+            first = index == 0  # only the first chunk is a reply
+            sent = await self._transport.send(
+                chat_id, chunk, reply_to=reply_to if first else None, notify=notify and first
             )
-            reply = None  # only the first chunk is a reply
+            if sent is None:
+                return False
+            await self.remember(chat_id, sent, chunk, reply_to if first else None)
         self._state(chat_id).last_comment_at = self._clock()
         return True
 
-    async def _react(self, chat_id: int, message_id: int, emoji: str) -> None:
-        try:
-            await self._bot.set_message_reaction(
-                chat_id=chat_id, message_id=message_id, reaction=[ReactionTypeEmoji(emoji=emoji)]
+    async def remember(self, chat_id: int, sent: Sent, text: str, reply_to: int | None = None) -> None:
+        """Store a message the bot posted, so it shows up as «Ты» in later prompts."""
+        await self._storage.add_message(
+            StoredMessage(
+                chat_id=chat_id,
+                message_id=sent.message_id,
+                user_id=self._me.id,
+                author=self._me.username or "bot",
+                text=text,
+                reply_to=reply_to,
+                is_bot=True,
+                created_at=sent.created_at,
             )
-        except TelegramAPIError as exc:
-            # The chat may restrict reactions; that's fine, just stay quiet.
-            log.info("chat=%s reaction %s rejected: %s", chat_id, emoji, exc)
+        )
