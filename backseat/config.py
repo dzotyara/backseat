@@ -78,7 +78,7 @@ class CoreSettings(BaseSettings):
     focus_history_tokens: int = 1500
     author_history_tokens: int = 600
     summary_chunk_tokens: int = 2500
-    summary_max_words: int = 900
+    summary_max_words: int = 600
 
     reactions_enabled: bool = True
     weekly_digest: bool = True

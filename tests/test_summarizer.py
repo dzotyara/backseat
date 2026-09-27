@@ -53,7 +53,7 @@ async def test_oldest_chunk_is_folded_into_the_summary(
     assert "ТЕКУЩАЯ СВОДКА:\n(пока пусто)" in prompt
     assert "#1 " in prompt and "#40 " not in prompt
     assert "Про Иван — подробнее всех" in prompt
-    assert "не больше 900 слов, все четыре раздела." in prompt
+    assert "не больше 600 слов, все четыре раздела." in prompt
     assert 1 < first.upto_message_id < 40
 
     assert await summarizer.update_once(CHAT)
