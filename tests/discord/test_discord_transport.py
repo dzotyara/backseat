@@ -62,6 +62,13 @@ async def test_react() -> None:
     assert channel.reactions == [(77, "🗿")]
 
 
+async def test_the_heart_gets_discords_spelling() -> None:
+    channel = FakeChannel(CHANNEL)
+    transport = DiscordTransport(FakeClient(cached=[channel]))  # type: ignore[arg-type]
+    await transport.react(CHANNEL, 77, "❤")
+    assert channel.reactions == [(77, "❤️")]
+
+
 async def test_typing_shows_while_the_body_runs() -> None:
     channel = FakeChannel(CHANNEL)
     transport = DiscordTransport(FakeClient(cached=[channel]))  # type: ignore[arg-type]

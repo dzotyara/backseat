@@ -1,15 +1,45 @@
+# One image, three services. The Telegram bot always runs; the Discord bot and the web panel
+# are optional profiles — enable them with COMPOSE_PROFILES=discord,web in .env.
+x-service: &service
+  build: .
+  image: backseat:latest
+  restart: unless-stopped
+  volumes:
+    - ./data:/app/data # SQLite memory: survives restarts and rebuilds
+    - ./prompts:/app/prompts:ro # default personas, editable without a rebuild
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
 services:
   backseat:
-    build: .
+    <<: *service
     container_name: backseat
-    restart: unless-stopped
+    command: ["python", "-m", "backseat.telegram"]
     env_file:
       - .env
-    volumes:
-      - ./data:/app/data # SQLite memory: survives restarts and rebuilds
-      - ./prompts:/app/prompts:ro # default persona, editable without a rebuild
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
+
+  backseat-discord:
+    <<: *service
+    container_name: backseat-discord
+    command: ["python", "-m", "backseat.discord"]
+    profiles: ["discord"]
+    env_file: # .env.discord overrides the shared .env: token, channel, persona, database
+      - .env
+      - .env.discord
+
+  backseat-web:
+    <<: *service
+    container_name: backseat-web
+    command: ["python", "-m", "backseat.web"]
+    profiles: ["web"]
+    env_file:
+      - .env
+    environment:
+      WEB_HOST: 0.0.0.0 # inside the container; published on the server's localhost only
+      TELEGRAM_DB_PATH: data/backseat.db
+      DISCORD_DB_PATH: data/discord.db
+    ports:
+      - "127.0.0.1:8090:8090" # reach it through an SSH tunnel, never from the internet

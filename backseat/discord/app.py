@@ -50,7 +50,7 @@ class BackseatClient(discord.Client):
         self.transport = DiscordTransport(self)
         self.bot_config = BotConfig(storage, settings)
         self.formatter = LineFormatter(ZoneInfo(settings.timezone), settings.focus_users)
-        self.summarizer = Summarizer(storage, llm, settings, self.formatter)
+        self.summarizer = Summarizer(storage, llm, settings, self.formatter, platform=self.transport.platform)
         self.services: Services | None = None  # set in setup_hook, once the bot knows who it is
         self._background: set[asyncio.Task[None]] = set()
         self._catching_up: set[int] = set()  # channels the catch-up is loading and folding right now

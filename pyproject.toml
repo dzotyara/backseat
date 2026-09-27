@@ -1,6 +1,6 @@
 [project]
 name = "backseat"
-version = "2.0.0"
+version = "2.1.0"
 description = "Telegram group-chat bot with long-term memory"
 requires-python = ">=3.12"
 

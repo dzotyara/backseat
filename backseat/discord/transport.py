@@ -11,6 +11,10 @@ from backseat.transport import Sent
 
 log = logging.getLogger(__name__)
 
+# The core's reaction list uses Telegram's spelling; Discord knows the heart only with the
+# emoji variation selector and rejects the bare "❤" as an unknown emoji.
+_DISCORD_SPELLING = {"❤": "❤️"}
+
 
 class DiscordTransport:
     platform = "Discord"
@@ -53,6 +57,7 @@ class DiscordTransport:
         channel = await self.channel(chat_id)
         if channel is None:
             return False
+        emoji = _DISCORD_SPELLING.get(emoji, emoji)
         try:
             await channel.get_partial_message(message_id).add_reaction(emoji)  # type: ignore[attr-defined]
         except discord.HTTPException as exc:

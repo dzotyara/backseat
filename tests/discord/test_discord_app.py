@@ -13,7 +13,7 @@ import pytest
 from backseat.discord.app import BackseatClient
 from backseat.discord.settings import DiscordSettings
 from backseat.responder import Incoming, Responder
-from backseat.storage import Storage
+from backseat.storage import Storage, StoredMessage
 from backseat.triggers import BotIdentity
 from tests.discord.fakes import (
     BASE,
@@ -256,3 +256,40 @@ async def test_a_mention_gets_a_reply_that_pings_only_its_author(
     assert channel.typing_shown == 1
     remembered = await storage.get_message(CHANNEL, reply.id)
     assert remembered is not None and remembered.is_bot and remembered.reply_to == question.id
+
+
+async def test_the_summary_prompt_names_discord(tmp_path: Path) -> None:
+    class RecordingLLM(FakeLLM):
+        def __init__(self) -> None:
+            super().__init__("Сводка")
+            self.prompts: list[list[dict[str, str]]] = []
+
+        async def complete(self, messages: list[dict[str, str]], **options: Any) -> Any:
+            self.prompts.append(messages)
+            return await super().complete(messages, **options)
+
+    settings = make_settings(tmp_path, recent_context_tokens=50, summary_chunk_tokens=200)
+    storage = Storage(settings.db_path)
+    await storage.connect()
+    try:
+        await storage.add_messages(
+            [
+                StoredMessage(
+                    CHANNEL,
+                    1_300_000_000_000_000_000 + i,
+                    PETYA,
+                    "Петя",
+                    f"сообщение номер {i}",
+                    None,
+                    False,
+                    1_790_000_000 + i,
+                )
+                for i in range(1, 30)
+            ]
+        )
+        llm = RecordingLLM()
+        client = BackseatClient(settings, storage, llm)  # type: ignore[arg-type]
+        assert await client.summarizer.update_once(CHANNEL)
+        assert "группового чата в Discord" in llm.prompts[0][0]["content"]
+    finally:
+        await storage.close()
