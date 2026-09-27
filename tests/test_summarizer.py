@@ -1,8 +1,11 @@
+import dataclasses
 import re
 from pathlib import Path
 
+import pytest
+
 from backseat.bot_config import BotConfig
-from backseat.llm import LLMError
+from backseat.llm import Completion, LLMError
 from backseat.render import LineFormatter
 from backseat.storage import Storage
 from backseat.summarizer import Summarizer
@@ -84,3 +87,20 @@ async def test_the_panel_picks_the_summary_models(tmp_path: Path, storage: Stora
     llm = FakeLLM("Сводка")
     assert await Summarizer(storage, llm, settings, formatter, bot_config=bot_config).update_once(CHAT)  # type: ignore[arg-type]
     assert llm.options[0]["models"] == ["panel/model"]
+
+
+async def test_the_summary_gets_room_and_a_cut_is_logged(
+    tmp_path: Path, storage: Storage, formatter: LineFormatter, caplog: pytest.LogCaptureFixture
+) -> None:
+    settings = make_settings(tmp_path, recent_context_tokens=100, summary_chunk_tokens=100, summary_max_words=500)
+    await fill(storage, 40)
+
+    class CutLLM(FakeLLM):
+        async def complete(self, messages: list[dict[str, str]], **options: object) -> Completion:
+            completion = await super().complete(messages, **options)
+            return dataclasses.replace(completion, finish_reason="length")
+
+    llm = CutLLM("Сводка, обрезанная на полусл")
+    assert await Summarizer(storage, llm, settings, formatter).update_once(CHAT)  # type: ignore[arg-type]
+    assert llm.options[0]["max_tokens"] == 500 * 6
+    assert "hit max_tokens" in caplog.text

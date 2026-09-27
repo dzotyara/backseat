@@ -14,7 +14,9 @@ from backseat.storage import Storage
 log = logging.getLogger(__name__)
 
 _TAIL_FETCH = 5000
-_SUMMARY_MAX_TOKENS = 3000
+# Russian runs 3–5 tokens a word and models overshoot the word limit: leave plenty of room,
+# a summary cut off at max_tokens would lose its last sections on every fold.
+_TOKENS_PER_WORD = 6
 
 
 class Summarizer:
@@ -86,10 +88,12 @@ class Summarizer:
         panel = {"models": (await self._bot_config.runtime()).models} if self._bot_config else {}
         completion = await self._llm.complete(
             [{"role": "system", "content": system}, {"role": "user", "content": user}],
-            max_tokens=_SUMMARY_MAX_TOKENS,
+            max_tokens=settings.summary_max_words * _TOKENS_PER_WORD,
             temperature=0.2,
             **panel,
         )
+        if completion.finish_reason == "length":
+            log.warning("chat=%s the summary hit max_tokens and was cut; lower SUMMARY_MAX_WORDS", chat_id)
         await self._storage.set_summary(chat_id, completion.text.strip(), chunk[-1].message_id, int(time.time()))
         log.info("chat=%s summary now covers up to message %s (%d folded)", chat_id, chunk[-1].message_id, len(chunk))
         return True

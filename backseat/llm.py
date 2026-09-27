@@ -37,6 +37,7 @@ class Completion:
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     cost: float | None = None
+    finish_reason: str | None = None  # "length" means the answer hit max_tokens and was cut
 
 
 class LLMClient:
@@ -144,6 +145,7 @@ class LLMClient:
             prompt_tokens=usage.get("prompt_tokens"),
             completion_tokens=usage.get("completion_tokens"),
             cost=usage.get("cost"),
+            finish_reason=choices[0].get("finish_reason"),
         )
 
     async def key_info(self) -> dict[str, Any] | None:
