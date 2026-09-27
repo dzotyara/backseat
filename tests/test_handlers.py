@@ -12,12 +12,12 @@ from zoneinfo import ZoneInfo
 import pytest
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.base import BaseSession
-from aiogram.methods import GetFile, GetMe, SendDocument, SendMessage, TelegramMethod
+from aiogram.methods import GetFile, GetMe, SendDocument, SendMessage, SetMyCommands, TelegramMethod
 from aiogram.types import Chat, File, Message, User
 
-from backseat.chat_config import ChatConfig
+from backseat.bot_config import BotConfig
 from backseat.context import ContextBuilder
-from backseat.handlers import Services, create_router
+from backseat.handlers import Services, create_router, register_commands
 from backseat.render import LineFormatter
 from backseat.responder import Responder
 from backseat.storage import Storage
@@ -82,9 +82,9 @@ async def app(tmp_path: Path) -> AsyncIterator[SimpleNamespace]:
     session = RecordingSession()
     bot = Bot("42:TEST", session=session)
     llm = FakeLLM()
-    chat_config = ChatConfig(storage, settings)
+    bot_config = BotConfig(storage, settings)
     formatter = LineFormatter(ZoneInfo(settings.timezone), settings.focus_users)
-    context = ContextBuilder(storage, chat_config, settings, BOT, formatter)
+    context = ContextBuilder(storage, bot_config, settings, BOT, formatter)
     responder = Responder(
         bot=bot,
         storage=storage,
@@ -95,9 +95,9 @@ async def app(tmp_path: Path) -> AsyncIterator[SimpleNamespace]:
         typing=lambda chat_id: contextlib.nullcontext(),
     )
     dispatcher = Dispatcher()
-    dispatcher.include_router(create_router(Services(settings, storage, chat_config, llm, responder, BOT)))  # type: ignore[arg-type]
+    dispatcher.include_router(create_router(Services(settings, storage, bot_config, llm, responder, BOT)))  # type: ignore[arg-type]
     yield SimpleNamespace(
-        bot=bot, dp=dispatcher, session=session, storage=storage, llm=llm, responder=responder, chat_config=chat_config
+        bot=bot, dp=dispatcher, session=session, storage=storage, llm=llm, responder=responder, bot_config=bot_config
     )
     await responder.shutdown()
     await storage.close()
@@ -146,47 +146,96 @@ async def test_group_message_is_remembered_and_a_call_by_name_is_answered(app: S
     assert reply.reply_parameters.message_id == second
 
 
+async def test_a_bare_sticker_reply_to_the_bot_is_answered_too(app: SimpleNamespace) -> None:
+    app.llm.answers = ["Рад, что зашло."]
+    bot_message = {
+        "message_id": 7,
+        "date": BASE_TS,
+        "chat": {"id": CHAT, "type": "supergroup", "title": "Чат"},
+        "from": {"id": BOT.id, "is_bot": True, "first_name": "Backseat"},
+        "text": "шутка",
+    }
+    sticker = {
+        "file_id": "s",
+        "file_unique_id": "su",
+        "type": "regular",
+        "width": 1,
+        "height": 1,
+        "is_animated": False,
+        "is_video": False,
+        "emoji": "😂",
+    }
+    reply = await feed(app, sticker=sticker, reply_to_message=bot_message)
+    await app.responder.process(CHAT)
+    sent = next(m for m in app.session.requests if isinstance(m, SendMessage))
+    assert (sent.text, sent.reply_parameters.message_id) == ("Рад, что зашло.", reply)
+
+
 async def test_owner_renames_the_bot_in_cyrillic(app: SimpleNamespace) -> None:
     await feed(app, "/имена бэксит, бот", user_id=OWNER)
     assert app.session.texts()[-1] == "Теперь откликаюсь на: бэксит, бот и @Backseatyara_bot"
-    assert await app.chat_config.names(CHAT) == ["бэксит", "бот"]
+    assert await app.bot_config.names() == ["бэксит", "бот"]
 
     app.llm.answers = ["Тут я."]
     await feed(app, "бот, ответь")
     await app.responder.process(CHAT)
     assert app.session.texts()[-1] == "Тут я."
 
-    await feed(app, "/names сброс", user_id=OWNER)
-    assert await app.chat_config.names(CHAT) == ["бэксит", "ботяра"]
-
-
-async def test_only_the_owner_changes_the_prompt(app: SimpleNamespace) -> None:
-    await feed(app, "/промпт Ты — злой бот", user_id=IVAN)
+    await feed(app, "/имена ботище", user_id=IVAN)
     assert app.session.texts()[-1] == "Это может менять только владелец бота."
-    assert not await app.chat_config.has_custom_persona(CHAT)
+    await feed(app, "/names сброс", user_id=OWNER)
+    assert await app.bot_config.names() == ["бэксит", "ботяра"]
 
-    await feed(app, "/prompt Ты — добрый бот", user_id=OWNER)
-    assert await app.chat_config.persona(CHAT) == "Ты — добрый бот"
 
+async def test_prompt_does_not_exist_for_anyone_but_the_owner(app: SimpleNamespace) -> None:
     await feed(app, "/промпт")
-    assert app.session.texts()[-1] == "Характер для этого чата:\n\nТы — добрый бот"
+    await feed(app, "/промпт Ты — злой бот")
+    await feed(app, "/prompt", chat_id=IVAN)  # not even in private
+    assert app.session.texts() == []
+    assert not await app.bot_config.has_custom_persona()
 
-    await feed(app, "/промпт сброс", user_id=OWNER)
-    assert await app.chat_config.persona(CHAT) == "Ты — тестовый бот. Стеби Ивана."
+
+async def test_owner_manages_the_prompt_only_in_private(app: SimpleNamespace) -> None:
+    await feed(app, "/prompt Ты — добрый бот", user_id=OWNER)  # in the group: never show or change it there
+    assert app.session.texts()[-1] == "Промпт настраивается только у меня в личке."
+    assert not await app.bot_config.has_custom_persona()
+
+    await feed(app, "/prompt Ты — добрый бот", user_id=OWNER, chat_id=OWNER)
+    assert await app.bot_config.persona() == "Ты — добрый бот"
+    await feed(app, "/промпт", user_id=OWNER, chat_id=OWNER)
+    assert app.session.texts()[-1] == "Свой характер:\n\nТы — добрый бот"
+    await feed(app, "/промпт сброс", user_id=OWNER, chat_id=OWNER)
+    assert await app.bot_config.persona() == "Ты — тестовый бот. Стеби Ивана."
 
 
 async def test_prompt_from_a_text_file(app: SimpleNamespace) -> None:
     app.session.file_bytes = "Характер из файла".encode()
     document = {"file_id": "d1", "file_unique_id": "u1", "file_name": "bot.txt", "mime_type": "text/plain"}
-    await feed(app, caption="/промпт", document=document, user_id=OWNER)
-    assert await app.chat_config.persona(CHAT) == "Характер из файла"
+    await feed(app, caption="/промпт", document=document, user_id=OWNER, chat_id=OWNER)
+    assert await app.bot_config.persona() == "Характер из файла"
     assert app.session.texts()[-1] == "Новый характер сохранён: 17 символов."
 
 
 async def test_long_prompt_is_shown_as_a_file(app: SimpleNamespace) -> None:
-    await app.chat_config.set_persona(CHAT, "длинно " * 1000)
-    await feed(app, "/prompt")
+    await app.bot_config.set_persona("длинно " * 1000)
+    await feed(app, "/prompt", user_id=OWNER, chat_id=OWNER)
     assert len(app.session.documents()) == 1
+
+
+async def test_prompt_is_only_in_the_owners_menu_and_help(app: SimpleNamespace) -> None:
+    await register_commands(app.bot, [OWNER])
+    public, owner = [m for m in app.session.requests if isinstance(m, SetMyCommands)]
+    assert public.scope is None
+    assert "prompt" not in [c.command for c in public.commands]
+    assert owner.scope.chat_id == OWNER
+    assert "prompt" in [c.command for c in owner.commands]
+
+    await feed(app, "/help")
+    assert "/prompt" not in app.session.texts()[-1]
+    await feed(app, "/help", user_id=OWNER)  # the owner in the group: still nothing about the prompt
+    assert "/prompt" not in app.session.texts()[-1]
+    await feed(app, "/help", user_id=OWNER, chat_id=OWNER)
+    assert "/prompt" in app.session.texts()[-1]
 
 
 async def test_id_status_and_ping(app: SimpleNamespace) -> None:

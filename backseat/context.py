@@ -1,6 +1,6 @@
 """Assembles what the model sees: persona + memory + personal history + recent chat + the new messages."""
 
-from backseat.chat_config import ChatConfig
+from backseat.bot_config import BotConfig
 from backseat.config import Settings
 from backseat.prompts import DIGEST_TASK, PARTICIPANT_LINE, SYSTEM_TEMPLATE
 from backseat.render import LineFormatter
@@ -20,33 +20,33 @@ class ContextBuilder:
     def __init__(
         self,
         storage: Storage,
-        chat_config: ChatConfig,
+        bot_config: BotConfig,
         settings: Settings,
         me: BotIdentity,
         formatter: LineFormatter,
     ) -> None:
         self._storage = storage
-        self._chat_config = chat_config
+        self._bot_config = bot_config
         self._settings = settings
         self._me = me
         self.formatter = formatter
 
-    async def system_prompt(self, chat_id: int) -> str:
+    async def system_prompt(self) -> str:
         participants = "".join(
             PARTICIPANT_LINE.format(name=name, user_id=user_id) for user_id, name in self._settings.focus_users.items()
         )
         return SYSTEM_TEMPLATE.format(
-            names=", ".join(await self._chat_config.names(chat_id)) or "—",
+            names=", ".join(await self._bot_config.names()) or "—",
             username=self._me.username,
             participants=participants,
-            persona=await self._chat_config.persona(chat_id),
+            persona=await self._bot_config.persona(),
         )
 
     async def for_reply(self, chat_id: int, new: list[StoredMessage], task: str) -> ChatMessages:
         sections = await self._sections(chat_id, new)
         sections.append(task)
         return [
-            {"role": "system", "content": await self.system_prompt(chat_id)},
+            {"role": "system", "content": await self.system_prompt()},
             {"role": "user", "content": "\n\n".join(sections)},
         ]
 
@@ -58,7 +58,7 @@ class ContextBuilder:
             sections.append("ПОСЛЕДНЯЯ ПЕРЕПИСКА:\n" + self.formatter.lines(picked))
         sections.append(DIGEST_TASK)
         return [
-            {"role": "system", "content": await self.system_prompt(chat_id)},
+            {"role": "system", "content": await self.system_prompt()},
             {"role": "user", "content": "\n\n".join(sections)},
         ]
 

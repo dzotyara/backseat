@@ -7,11 +7,11 @@ from zoneinfo import ZoneInfo
 from aiogram import Bot, Dispatcher
 
 from backseat import __version__
-from backseat.chat_config import ChatConfig
+from backseat.bot_config import BotConfig
 from backseat.config import Settings
 from backseat.context import ContextBuilder
 from backseat.digest import WeeklyDigest
-from backseat.handlers import BOT_COMMANDS, Services, create_router
+from backseat.handlers import Services, create_router, register_commands
 from backseat.llm import LLMClient
 from backseat.render import LineFormatter
 from backseat.responder import Responder
@@ -33,8 +33,8 @@ async def run(settings: Settings) -> None:
         user = await bot.get_me()
         me = BotIdentity(id=user.id, username=user.username or "")
         formatter = LineFormatter(ZoneInfo(settings.timezone), settings.focus_users)
-        chat_config = ChatConfig(storage, settings)
-        context = ContextBuilder(storage, chat_config, settings, me, formatter)
+        bot_config = BotConfig(storage, settings)
+        context = ContextBuilder(storage, bot_config, settings, me, formatter)
         summarizer = Summarizer(storage, llm, settings, formatter)
         responder = Responder(
             bot=bot,
@@ -47,8 +47,8 @@ async def run(settings: Settings) -> None:
         )
 
         dispatcher = Dispatcher()
-        dispatcher.include_router(create_router(Services(settings, storage, chat_config, llm, responder, me)))
-        await bot.set_my_commands(BOT_COMMANDS)
+        dispatcher.include_router(create_router(Services(settings, storage, bot_config, llm, responder, me)))
+        await register_commands(bot, settings.owner_ids)
         if settings.weekly_digest:
             digest = WeeklyDigest(storage=storage, llm=llm, context=context, responder=responder, settings=settings)
             background.append(asyncio.create_task(digest.run_forever(), name="weekly-digest"))

@@ -4,7 +4,7 @@ from collections.abc import Callable
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from backseat.chat_config import ChatConfig
+from backseat.bot_config import BotConfig
 from backseat.config import Settings
 from backseat.context import ContextBuilder
 from backseat.llm import Completion, LLMError
@@ -26,7 +26,7 @@ def make_responder(
     after_batch: object = None,
 ) -> Responder:
     formatter = LineFormatter(ZoneInfo(settings.timezone), settings.focus_users)
-    context = ContextBuilder(storage, ChatConfig(storage, settings), settings, BOT, formatter)
+    context = ContextBuilder(storage, BotConfig(storage, settings), settings, BOT, formatter)
     return Responder(
         bot=bot,  # type: ignore[arg-type]
         storage=storage,

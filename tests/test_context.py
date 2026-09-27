@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from backseat.chat_config import ChatConfig
+from backseat.bot_config import BotConfig
 from backseat.context import ContextBuilder
 from backseat.render import LineFormatter
 from backseat.storage import Storage
@@ -19,7 +19,7 @@ async def test_reply_context_has_every_section(tmp_path: Path, storage: Storage,
     for message in new:
         await storage.add_message(message)
 
-    builder = ContextBuilder(storage, ChatConfig(storage, settings), settings, BOT, formatter)
+    builder = ContextBuilder(storage, BotConfig(storage, settings), settings, BOT, formatter)
     system, user = await builder.for_reply(CHAT, new, "ЗАДАЧА")
 
     assert "Ты — тестовый бот. Стеби Ивана." in system["content"]
@@ -46,7 +46,7 @@ async def test_empty_chat_context_is_just_the_new_messages(
 ) -> None:
     new = [msg(1, "первое сообщение")]
     await storage.add_message(new[0])
-    builder = ContextBuilder(storage, ChatConfig(storage, settings), settings, BOT, formatter)  # type: ignore[arg-type]
+    builder = ContextBuilder(storage, BotConfig(storage, settings), settings, BOT, formatter)  # type: ignore[arg-type]
     _, user = await builder.for_reply(CHAT, new, "ЗАДАЧА")
     assert user["content"].startswith("НОВОЕ:\n")
     assert "ПАМЯТЬ ЧАТА" not in user["content"]
@@ -56,7 +56,7 @@ async def test_digest_context_covers_the_week(settings: object, storage: Storage
     week_ago = BASE_TS - 7 * 24 * 3600
     await storage.add_message(msg(1, "древность", ts=week_ago - 3600))
     await storage.add_message(msg(2, "на этой неделе", ts=BASE_TS))
-    builder = ContextBuilder(storage, ChatConfig(storage, settings), settings, BOT, formatter)  # type: ignore[arg-type]
+    builder = ContextBuilder(storage, BotConfig(storage, settings), settings, BOT, formatter)  # type: ignore[arg-type]
     _, user = await builder.for_digest(CHAT, week_ago)
     assert "на этой неделе" in user["content"]
     assert "древность" not in user["content"]

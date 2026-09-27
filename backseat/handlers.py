@@ -1,45 +1,56 @@
 """aiogram handlers: commands and the stream of group messages."""
 
+import logging
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandObject, CommandStart
-from aiogram.types import BotCommand, BufferedInputFile, Document, Message
+from aiogram.types import BotCommand, BotCommandScopeChat, BufferedInputFile, Document, Message
 
 from backseat import __version__
-from backseat.chat_config import ChatConfig
+from backseat.bot_config import BotConfig
 from backseat.config import Settings
 from backseat.llm import LLMClient
 from backseat.render import describe_message
 from backseat.responder import Incoming, Responder
 from backseat.storage import Storage, StoredMessage
-from backseat.triggers import Address, BotIdentity, find_address, is_trivial
+from backseat.triggers import BotIdentity, find_address, is_trivial
+
+log = logging.getLogger(__name__)
 
 # Telegram menu commands must be Latin; the Cyrillic aliases work when typed.
 BOT_COMMANDS = [
     BotCommand(command="help", description="Что умеет бот"),
-    BotCommand(command="prompt", description="Характер бота (/промпт)"),
     BotCommand(command="names", description="Имена, на которые бот откликается (/имена)"),
     BotCommand(command="status", description="Модель, память и лимиты"),
     BotCommand(command="id", description="Узнать свой Telegram ID"),
     BotCommand(command="ping", description="Проверить, что бот жив"),
 ]
+# /prompt exists only for the owner and only in the private chat with the bot: the persona
+# says who gets roasted, so it must never be shown in the group.
+OWNER_COMMANDS = [BotCommand(command="prompt", description="Характер бота (/промпт)"), *BOT_COMMANDS]
 
 HELP_TEXT = """\
 Я Бэксит v{version}: читаю чат, помню всю беседу и иногда вставляю пару слов.
 Позвать меня: @{username}, ответ на моё сообщение или по имени ({names}). На обращение отвечаю всегда.
 
 Команды:
-/prompt или /промпт — показать мой характер. Владелец меняет его: /промпт новый текст, \
-.txt-файлом с подписью /промпт или /промпт сброс
 /names или /имена — на какие имена откликаюсь. Владелец меняет: /имена бэксит, ботяра
 /status — модель, память и лимиты
 /id — узнать свой Telegram ID
 /ping — проверить, что я жив"""
+
+OWNER_HELP = """
+
+Только для тебя, здесь в личке:
+/prompt или /промпт — показать мой характер. Поменять: /промпт новый текст, \
+.txt-файлом с подписью /промпт или /промпт сброс"""
 
 _GROUPS = F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP})
 _RESET_WORDS = {"сброс", "сбросить", "reset", "default"}
@@ -51,10 +62,20 @@ _INLINE_PROMPT_LIMIT = 3500
 class Services:
     settings: Settings
     storage: Storage
-    chat_config: ChatConfig
+    bot_config: BotConfig
     llm: LLMClient
     responder: Responder
     me: BotIdentity
+
+
+async def register_commands(bot: Bot, owner_ids: Iterable[int]) -> None:
+    """Everyone gets the public menu; owners also see /prompt in their private chat with the bot."""
+    await bot.set_my_commands(BOT_COMMANDS)
+    for owner_id in owner_ids:
+        try:
+            await bot.set_my_commands(OWNER_COMMANDS, scope=BotCommandScopeChat(chat_id=owner_id))
+        except TelegramAPIError as exc:
+            log.warning("No owner menu for %s — they must /start the bot in private first: %s", owner_id, exc)
 
 
 def sender_of(message: Message) -> tuple[int, str, bool]:
@@ -108,8 +129,11 @@ def create_router(svc: Services) -> Router:
     @router.message(CommandStart())
     @router.message(Command("help", "помощь", ignore_case=True))
     async def cmd_help(message: Message) -> None:
-        names = ", ".join(await svc.chat_config.names(message.chat.id))
-        await message.reply(HELP_TEXT.format(version=__version__, username=svc.me.username, names=names))
+        names = ", ".join(await svc.bot_config.names())
+        text = HELP_TEXT.format(version=__version__, username=svc.me.username, names=names)
+        if message.chat.type == ChatType.PRIVATE and is_owner(message):
+            text += OWNER_HELP
+        await message.reply(text)
 
     @router.message(Command("ping", "пинг", ignore_case=True))
     async def cmd_ping(message: Message) -> None:
@@ -139,9 +163,7 @@ def create_router(svc: Services) -> Router:
         else:
             memory += ", сводки пока нет"
         lines.append(memory)
-        persona = "свой для этого чата" if await svc.chat_config.has_custom_persona(chat_id) else "по умолчанию"
-        names = ", ".join(await svc.chat_config.names(chat_id))
-        lines.append(f"Характер: {persona}; имена: {names}")
+        lines.append("Имена: " + ", ".join(await svc.bot_config.names()))
         info = await svc.llm.key_info()
         if info:
             free = info.get("free_model_daily_requests") or {}
@@ -152,10 +174,8 @@ def create_router(svc: Services) -> Router:
         await message.reply("\n".join(lines))
 
     async def show_persona(message: Message) -> None:
-        chat_id = message.chat.id
-        persona = await svc.chat_config.persona(chat_id)
-        custom = await svc.chat_config.has_custom_persona(chat_id)
-        title = "Характер для этого чата" if custom else "Характер по умолчанию"
+        persona = await svc.bot_config.persona()
+        title = "Свой характер" if await svc.bot_config.has_custom_persona() else "Характер по умолчанию"
         if len(persona) <= _INLINE_PROMPT_LIMIT:
             await message.reply(f"{title}:\n\n{persona}")
         else:
@@ -165,15 +185,14 @@ def create_router(svc: Services) -> Router:
 
     @router.message(Command("prompt", "промпт", ignore_case=True))
     async def cmd_prompt(message: Message, command: CommandObject, bot: Bot) -> None:
-        if not chat_allowed(message):
+        if not is_owner(message):
+            return  # for everyone else the command does not exist
+        if message.chat.type != ChatType.PRIVATE:
+            await message.reply("Промпт настраивается только у меня в личке.")
             return
-        chat_id = message.chat.id
         arg = (command.args or "").strip()
         if not arg and not message.document:
             await show_persona(message)
-            return
-        if not is_owner(message):
-            await deny(message)
             return
         if message.document:
             text = await read_text_file(bot, message.document)
@@ -181,37 +200,36 @@ def create_router(svc: Services) -> Router:
                 await message.reply("Не смог прочитать файл: нужен текстовый .txt или .md до 100 КБ.")
                 return
         elif arg.casefold() in _RESET_WORDS:
-            await svc.chat_config.set_persona(chat_id, None)
+            await svc.bot_config.set_persona(None)
             await message.reply("Вернул характер по умолчанию.")
             return
         else:
             text = arg
-        await svc.chat_config.set_persona(chat_id, text)
+        await svc.bot_config.set_persona(text)
         await message.reply(f"Новый характер сохранён: {len(text)} символов.")
 
     @router.message(Command("names", "имена", ignore_case=True))
     async def cmd_names(message: Message, command: CommandObject) -> None:
         if not chat_allowed(message):
             return
-        chat_id = message.chat.id
         arg = (command.args or "").strip()
         if not arg:
-            names = ", ".join(await svc.chat_config.names(chat_id))
+            names = ", ".join(await svc.bot_config.names())
             await message.reply(f"Откликаюсь на: {names} и @{svc.me.username}")
             return
         if not is_owner(message):
             await deny(message)
             return
         if arg.casefold() in _RESET_WORDS:
-            await svc.chat_config.set_names(chat_id, None)
-            names = ", ".join(await svc.chat_config.names(chat_id))
+            await svc.bot_config.set_names(None)
+            names = ", ".join(await svc.bot_config.names())
             await message.reply(f"Вернул имена по умолчанию: {names}")
             return
         new_names = list(dict.fromkeys(name.strip() for name in re.split(r"[,;\n]+", arg) if name.strip()))
         if not new_names:
             await message.reply("Не понял имена. Пример: /имена бэксит, ботяра")
             return
-        await svc.chat_config.set_names(chat_id, new_names)
+        await svc.bot_config.set_names(new_names)
         await message.reply(f"Теперь откликаюсь на: {', '.join(new_names)} и @{svc.me.username}")
 
     @router.message(_GROUPS)
@@ -236,11 +254,9 @@ def create_router(svc: Services) -> Router:
         )
         if is_other_bot:
             return  # remember other bots' messages, never talk to them
-        trivial = is_trivial(message)
-        address = find_address(message, svc.me, await svc.chat_config.name_pattern(message.chat.id))
-        # A bare "😂" in reply to the bot is a reaction, not a question: let the model decide.
-        addressed = address in (Address.MENTION, Address.NAME) or (address is Address.REPLY and not trivial)
-        svc.responder.enqueue(message.chat.id, Incoming(message.message_id, user_id, addressed, trivial))
+        # Every @mention, name call and reply to the bot gets an answer — even a bare sticker reply.
+        addressed = find_address(message, svc.me, await svc.bot_config.name_pattern()) is not None
+        svc.responder.enqueue(message.chat.id, Incoming(message.message_id, user_id, addressed, is_trivial(message)))
 
     @router.edited_message(_GROUPS)
     async def on_group_edit(message: Message) -> None:

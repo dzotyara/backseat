@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from backseat.chat_config import ChatConfig
+from backseat.bot_config import BotConfig
 from backseat.config import Settings
 from backseat.context import ContextBuilder
 from backseat.digest import WeeklyDigest
@@ -19,7 +19,7 @@ SUNDAY_EVENING = datetime(2026, 9, 27, 20, 0, tzinfo=MSK)
 
 def make_digest(settings: Settings, storage: Storage, llm: FakeLLM, bot: FakeBot) -> WeeklyDigest:
     formatter = LineFormatter(MSK, settings.focus_users)
-    context = ContextBuilder(storage, ChatConfig(storage, settings), settings, BOT, formatter)
+    context = ContextBuilder(storage, BotConfig(storage, settings), settings, BOT, formatter)
     responder = Responder(
         bot=bot,  # type: ignore[arg-type]
         storage=storage,

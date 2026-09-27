@@ -16,7 +16,7 @@ User-facing docs are in README.md (Russian).
 
 1. `handlers.py` stores every group message (`storage.py`, SQLite) and calls `Responder.enqueue()`.
 2. `responder.py` batches messages per chat (debounce). A batch that addresses the bot (@mention,
-   one of its names, a non-trivial reply to it) is always answered — the model gets no veto, and a
+   one of its names, any reply to it — even a bare sticker) is always answered — the model gets no veto, and a
    fallback phrase is sent if every model fails. Otherwise the model answers with the protocol
    `SKIP` / `REPLY #id` + text / `REACT #id emoji`, parsed by `replies.parse_action`; anything
    unparseable is a SKIP.
@@ -40,7 +40,10 @@ User-facing docs are in README.md (Russian).
   `Command(..., ignore_case=True)`, which also reads captions.
 - The bot's own messages are stored with `is_bot=1` and shown to the model as «Ты».
 - Keep `prompts.UNPROMPTED_TASK` and `replies.parse_action` in sync.
-- The persona lives in `prompts/persona.md`; `/prompt` overrides it per chat (`chat_settings` table).
+- The persona lives in `prompts/persona.md`; `/prompt` overrides it bot-wide (`chat_settings` row with
+  chat_id 0, see `bot_config.py`). `/prompt` works only for owners and only in private: the persona names
+  the roast target, so it must never be shown in the group. Everyone else gets silence, and the command
+  is absent from their menu (`handlers.register_commands`).
 - This repository is public: no secrets, server addresses or real Telegram ids in committed files.
   Real values belong in the server's `.env`.
 
