@@ -27,13 +27,15 @@ def make_digest(
     bot_config: BotConfig | None = None,
 ) -> WeeklyDigest:
     formatter = LineFormatter(MSK, settings.focus_users)
-    context = ContextBuilder(storage, BotConfig(storage, settings), settings, BOT, formatter)
+    bot_config = bot_config or BotConfig(storage, settings)
+    context = ContextBuilder(storage, bot_config, settings, BOT, formatter)
     responder = Responder(
         transport=transport,
         storage=storage,
         llm=llm,  # type: ignore[arg-type]
         context=context,
         settings=settings,
+        bot_config=bot_config,
         me=BOT,
     )
     return WeeklyDigest(
@@ -53,7 +55,7 @@ async def fill_week(storage: Storage, count: int, chat_id: int = CHAT) -> None:
 
 
 def test_next_run_is_sunday_evening(settings: CoreSettings) -> None:
-    digest = WeeklyDigest(storage=None, llm=None, context=None, responder=None, settings=settings)  # type: ignore[arg-type]
+    digest = WeeklyDigest(storage=None, llm=None, context=None, responder=None, settings=settings, bot_config=None)  # type: ignore[arg-type]
     wednesday = datetime(2026, 9, 23, 12, 0, tzinfo=MSK)
     assert digest.next_run(wednesday) == SUNDAY_EVENING
     assert digest.next_run(SUNDAY_EVENING - timedelta(minutes=1)) == SUNDAY_EVENING
@@ -115,7 +117,7 @@ async def test_compose_cleans_the_post_and_lets_model_failures_through(tmp_path:
     digest = make_digest(settings, storage, llm, FakeTransport())
 
     assert await digest.compose(CHAT, WEEK_AGO) == "Итоги недели\n— шашлыки"
-    assert llm.options[0] == {"max_tokens": 1500}
+    assert llm.options[0] == {"max_tokens": 1500, "models": ["paid/model", "free/model:free"]}  # the .env order
     assert await digest.compose(CHAT, WEEK_AGO) is None  # nothing left to post
     with pytest.raises(LLMError):
         await digest.compose(CHAT, WEEK_AGO)
@@ -142,7 +144,7 @@ async def test_the_panel_can_pause_or_switch_off_the_digest_and_pick_its_models(
     assert llm.options[-1]["models"] == ["panel/model"]
 
 
-async def test_without_the_panel_the_env_switch_decides(tmp_path: Path, storage: Storage) -> None:
+async def test_without_panel_overrides_the_env_switch_decides(tmp_path: Path, storage: Storage) -> None:
     settings = make_settings(tmp_path, weekly_digest=False, digest_min_messages=3)
     await fill_week(storage, 5)
     llm = FakeLLM("Итоги недели")

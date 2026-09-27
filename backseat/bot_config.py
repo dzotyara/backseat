@@ -47,6 +47,11 @@ class Runtime:
         )
 
 
+def parse_names(text: str) -> list[str]:
+    """Names as the owner types them: separated by commas, semicolons or line breaks, no repeats."""
+    return list(dict.fromkeys(name.strip() for name in re.split(r"[,;\n]+", text) if name.strip()))
+
+
 def _flag(value: object) -> bool:
     if not isinstance(value, bool):
         raise ValueError("expected true or false")

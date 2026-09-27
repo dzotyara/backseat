@@ -4,8 +4,6 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-TELEGRAM_LIMIT = 4000  # a bit under Telegram's 4096 to leave room for surrogate pairs
-
 _ACTION_RE = re.compile(r"^\W*(SKIP|REPLY|REACT)\b(?:\W*?(\d+))?(.*)$", re.IGNORECASE)
 _PROTOCOL_LINE_RE = re.compile(r"^\W*(SKIP|REPLY|REACT)\b", re.IGNORECASE)
 _FENCE_LINE_RE = re.compile(r"^\s*```\w*\s*$")
@@ -69,8 +67,9 @@ def parse_action(raw: str, valid_ids: Sequence[int], emojis: Sequence[str]) -> A
     return SKIP
 
 
-def split_message(text: str, limit: int = TELEGRAM_LIMIT) -> list[str]:
-    """Split a long reply into Telegram-sized chunks, preferring line breaks."""
+def split_message(text: str, limit: int) -> list[str]:
+    """Split a long reply into chunks of at most `limit` characters (Transport.max_length),
+    preferring line breaks."""
     chunks = []
     while len(text) > limit:
         cut = text.rfind("\n", 0, limit)

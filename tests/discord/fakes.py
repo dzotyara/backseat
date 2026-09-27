@@ -33,7 +33,7 @@ PETYA = 300000000000000002
 IVAN = 300000000000000003
 OTHER_BOT = 300000000000000004
 
-ME = BotIdentity(id=BOT_ID, username="Бэксит", platform="Discord")
+ME = BotIdentity(id=BOT_ID, username="Бэксит")
 BASE = datetime(2026, 9, 20, 12, 0, tzinfo=UTC)  # 15:00 in Moscow
 
 # Payload-built discord.py objects touch state.http only to download something.

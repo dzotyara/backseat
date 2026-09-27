@@ -5,11 +5,19 @@ from pathlib import Path
 import pytest
 
 from backseat.bot_config import BotConfig
+from backseat.config import CoreSettings
 from backseat.llm import Completion, LLMError
 from backseat.render import LineFormatter
 from backseat.storage import Storage
 from backseat.summarizer import Summarizer
 from tests.conftest import CHAT, FakeLLM, make_settings, msg
+
+
+def make_summarizer(
+    storage: Storage, llm: FakeLLM, settings: CoreSettings, formatter: LineFormatter, platform: str = "Telegram"
+) -> Summarizer:
+    bot_config = BotConfig(storage, settings, platform=platform)
+    return Summarizer(storage, llm, settings, formatter, bot_config=bot_config)  # type: ignore[arg-type]
 
 
 async def fill(storage: Storage, count: int) -> None:
@@ -25,7 +33,7 @@ async def test_short_history_is_not_summarized(tmp_path: Path, storage: Storage,
     settings = make_settings(tmp_path)
     await fill(storage, 20)
     llm = FakeLLM()
-    assert not await Summarizer(storage, llm, settings, formatter).update_once(CHAT)  # type: ignore[arg-type]
+    assert not await make_summarizer(storage, llm, settings, formatter).update_once(CHAT)
     assert llm.calls == []
 
 
@@ -35,7 +43,7 @@ async def test_oldest_chunk_is_folded_into_the_summary(
     settings = make_settings(tmp_path, recent_context_tokens=100, summary_chunk_tokens=100)
     await fill(storage, 40)
     llm = FakeLLM("Сводка 1", "Сводка 2")
-    summarizer = Summarizer(storage, llm, settings, formatter)  # type: ignore[arg-type]
+    summarizer = make_summarizer(storage, llm, settings, formatter)
 
     assert await summarizer.update_once(CHAT)
     first = await storage.get_summary(CHAT)
@@ -62,7 +70,7 @@ async def test_an_oversized_summary_is_told_to_shrink(
     await fill(storage, 40)
     await storage.set_summary(CHAT, "раз два три четыре пять шесть семь", 0, 0)
     llm = FakeLLM("Короче")
-    assert await Summarizer(storage, llm, settings, formatter).update_once(CHAT)  # type: ignore[arg-type]
+    assert await make_summarizer(storage, llm, settings, formatter).update_once(CHAT)
     prompt = llm.prompt_text()
     assert "ТЕКУЩАЯ СВОДКА (слов: 7):\nраз два" in prompt
     assert prompt.endswith("не больше 5 слов, все четыре раздела. Текущая сводка длиннее лимита — ужми её.")
@@ -73,7 +81,7 @@ async def test_each_chunk_is_numbered_on_its_own(tmp_path: Path, storage: Storag
     for i in range(1001, 1041):  # every message answers the previous one
         await storage.add_message(msg(i, f"ответ {i}", reply_to=i - 1))
     llm = FakeLLM("Сводка 1", "Сводка 2")
-    summarizer = Summarizer(storage, llm, settings, formatter, platform="Discord")  # type: ignore[arg-type]
+    summarizer = make_summarizer(storage, llm, settings, formatter, platform="Discord")
     assert await summarizer.update_once(CHAT)
     assert await summarizer.update_once(CHAT)
 
@@ -89,7 +97,7 @@ async def test_each_chunk_is_numbered_on_its_own(tmp_path: Path, storage: Storag
 async def test_maintain_swallows_model_failures(tmp_path: Path, storage: Storage, formatter: LineFormatter) -> None:
     settings = make_settings(tmp_path, recent_context_tokens=100, summary_chunk_tokens=100)
     await fill(storage, 40)
-    summarizer = Summarizer(storage, FakeLLM(LLMError("down")), settings, formatter)  # type: ignore[arg-type]
+    summarizer = make_summarizer(storage, FakeLLM(LLMError("down")), settings, formatter)
     await summarizer.maintain(CHAT)
     assert await storage.get_summary(CHAT) is None
 
@@ -116,7 +124,7 @@ async def test_the_summary_gets_room_and_a_cut_is_logged(
             return dataclasses.replace(completion, finish_reason="length")
 
     llm = CutLLM("## Хроника\n- 20.09 Петя купил кроссовки\n## Участники\n- Петя обещал бегать по утр")
-    assert await Summarizer(storage, llm, settings, formatter).update_once(CHAT)  # type: ignore[arg-type]
+    assert await make_summarizer(storage, llm, settings, formatter).update_once(CHAT)
     assert llm.options[0]["max_tokens"] == 500 * 6
     assert "hit max_tokens" in caplog.text
     summary = await storage.get_summary(CHAT)  # the half-written last line is dropped

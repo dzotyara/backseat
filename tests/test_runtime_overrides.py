@@ -85,18 +85,6 @@ class FakeLLM:
         return Completion(text=self.answers.pop(0), model="fake")
 
 
-class OldSignatureLLM:
-    """complete() without a `models` parameter, like the fakes of tests written before the panel."""
-
-    def __init__(self, answer: str) -> None:
-        self.answer = answer
-        self.calls = 0
-
-    async def complete(self, messages: list[dict[str, str]]) -> Completion:
-        self.calls += 1
-        return Completion(text=self.answer, model="fake")
-
-
 @pytest.fixture
 async def storage(tmp_path: Path) -> AsyncIterator[Storage]:
     store = Storage(tmp_path / "bot.db")
@@ -111,22 +99,22 @@ def make_responder(
     llm: object,
     transport: FakeTransport,
     *,
-    bot_config: BotConfig | None,
+    bot_config: BotConfig,
     clock: Callable[[], float] = lambda: 1000.0,
     after_batch: object = None,
 ) -> Responder:
     formatter = LineFormatter(ZoneInfo(settings.timezone), {})
-    context = ContextBuilder(storage, BotConfig(storage, settings), settings, ME, formatter)
+    context = ContextBuilder(storage, bot_config, settings, ME, formatter)
     return Responder(
         transport=transport,
         storage=storage,
         llm=llm,  # type: ignore[arg-type]
         context=context,
         settings=settings,
+        bot_config=bot_config,
         me=ME,
         after_batch=after_batch,  # type: ignore[arg-type]
         clock=clock,
-        bot_config=bot_config,
     )
 
 
@@ -220,19 +208,6 @@ async def test_reactions_switch_changes_the_task_and_the_parser(tmp_path: Path, 
     await responder.process(CHAT)
     assert "REACT" in llm.prompts[1]
     assert transport.reactions == [(6, "🤡")]
-    await responder.shutdown()
-
-
-async def test_without_bot_config_only_the_settings_count(tmp_path: Path, storage: Storage) -> None:
-    settings = make_settings(tmp_path)
-    await BotConfig(storage, settings).set_runtime(paused=True, models=["panel/model"])
-    llm, transport = OldSignatureLLM("ответ"), FakeTransport()
-    responder = make_responder(settings, storage, llm, transport, bot_config=None)
-
-    responder.enqueue(CHAT, await add(storage, 5, "ботяра, ау", addressed=True))
-    await responder.process(CHAT)
-    assert llm.calls == 1  # no `models` argument passed, and the stored pause is not this responder's business
-    assert [reply_to for reply_to, _ in transport.sent] == [5]
     await responder.shutdown()
 
 

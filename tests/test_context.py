@@ -5,7 +5,6 @@ from backseat.config import CoreSettings
 from backseat.context import ContextBuilder
 from backseat.render import LineFormatter
 from backseat.storage import Storage
-from backseat.triggers import BotIdentity
 from tests.conftest import BASE_TS, BOT, CHAT, IVAN, make_settings, msg
 
 # Discord message ids are 19-digit snowflakes; the model should never have to copy one.
@@ -56,8 +55,7 @@ async def test_messages_are_numbered_from_one_and_map_back(
     await storage.add_message(msg(SNOWFLAKE + 700, "кто на футбол?", ts=BASE_TS))
     new = [msg(SNOWFLAKE + 950, "я", user_id=IVAN, author="Vanya", reply_to=SNOWFLAKE + 700, ts=BASE_TS + 60)]
     await storage.add_message(new[0])
-    me = BotIdentity(id=BOT.id, username=BOT.username, platform="Discord")
-    builder = ContextBuilder(storage, BotConfig(storage, settings), settings, me, formatter)
+    builder = ContextBuilder(storage, BotConfig(storage, settings, platform="Discord"), settings, BOT, formatter)
     prompt = await builder.for_reply(CHAT, new, lambda ids: "ЗАДАЧА")
     system, user = prompt.messages
 

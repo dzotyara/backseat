@@ -1,5 +1,6 @@
 """SQLite storage: every chat message, the rolling summary and per-chat settings."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -42,6 +43,11 @@ CREATE TABLE IF NOT EXISTS meta (
 """
 
 _COLUMNS = "chat_id, message_id, user_id, author, text, reply_to, is_bot, created_at"
+# A message stored again, e.g. by a backfill that starts over, only refreshes its text.
+_UPSERT_MESSAGE = (
+    f"INSERT INTO messages ({_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+    "ON CONFLICT (chat_id, message_id) DO UPDATE SET text = excluded.text"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +82,19 @@ def _row_to_message(row: aiosqlite.Row) -> StoredMessage:
     )
 
 
+def _message_to_row(message: StoredMessage) -> tuple[object, ...]:
+    return (
+        message.chat_id,
+        message.message_id,
+        message.user_id,
+        message.author,
+        message.text,
+        message.reply_to,
+        int(message.is_bot),
+        message.created_at,
+    )
+
+
 class Storage:
     def __init__(self, path: Path | str) -> None:
         self._path = Path(path)
@@ -103,41 +122,12 @@ class Storage:
     # --- messages ---
 
     async def add_message(self, message: StoredMessage) -> None:
-        await self.db.execute(
-            f"INSERT INTO messages ({_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT (chat_id, message_id) DO UPDATE SET text = excluded.text",
-            (
-                message.chat_id,
-                message.message_id,
-                message.user_id,
-                message.author,
-                message.text,
-                message.reply_to,
-                int(message.is_bot),
-                message.created_at,
-            ),
-        )
+        await self.db.execute(_UPSERT_MESSAGE, _message_to_row(message))
         await self.db.commit()
 
     async def add_messages(self, messages: list[StoredMessage]) -> None:
         """add_message for many rows in one transaction, e.g. a channel's history."""
-        await self.db.executemany(
-            f"INSERT INTO messages ({_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT (chat_id, message_id) DO UPDATE SET text = excluded.text",
-            [
-                (
-                    message.chat_id,
-                    message.message_id,
-                    message.user_id,
-                    message.author,
-                    message.text,
-                    message.reply_to,
-                    int(message.is_bot),
-                    message.created_at,
-                )
-                for message in messages
-            ],
-        )
+        await self.db.executemany(_UPSERT_MESSAGE, [_message_to_row(message) for message in messages])
         await self.db.commit()
 
     async def edit_message(self, chat_id: int, message_id: int, text: str, edited_at: int) -> None:
@@ -147,60 +137,49 @@ class Storage:
         )
         await self.db.commit()
 
+    async def _select(self, condition: str, params: Sequence[object]) -> list[StoredMessage]:
+        """Messages matching `condition` — a WHERE clause, maybe with ORDER BY and LIMIT."""
+        async with self.db.execute(f"SELECT {_COLUMNS} FROM messages WHERE {condition}", params) as cursor:
+            return [_row_to_message(row) for row in await cursor.fetchall()]
+
+    async def _newest(self, condition: str, params: Sequence[object], limit: int) -> list[StoredMessage]:
+        """The `limit` newest messages matching `condition`, oldest first."""
+        messages = await self._select(f"{condition} ORDER BY message_id DESC LIMIT ?", (*params, limit))
+        messages.reverse()
+        return messages
+
     async def get_message(self, chat_id: int, message_id: int) -> StoredMessage | None:
-        async with self.db.execute(
-            f"SELECT {_COLUMNS} FROM messages WHERE chat_id = ? AND message_id = ?",
-            (chat_id, message_id),
-        ) as cursor:
-            row = await cursor.fetchone()
-        return _row_to_message(row) if row else None
+        found = await self._select("chat_id = ? AND message_id = ?", (chat_id, message_id))
+        return found[0] if found else None
 
     async def get_messages(self, chat_id: int, message_ids: list[int]) -> list[StoredMessage]:
         """Messages with the given ids that exist, oldest first."""
         if not message_ids:
             return []
         placeholders = ",".join("?" * len(message_ids))
-        async with self.db.execute(
-            f"SELECT {_COLUMNS} FROM messages WHERE chat_id = ? AND message_id IN ({placeholders}) ORDER BY message_id",
-            (chat_id, *message_ids),
-        ) as cursor:
-            return [_row_to_message(row) for row in await cursor.fetchall()]
+        return await self._select(
+            f"chat_id = ? AND message_id IN ({placeholders}) ORDER BY message_id", (chat_id, *message_ids)
+        )
 
     async def messages_before(self, chat_id: int, before_id: int, limit: int) -> list[StoredMessage]:
         """The `limit` newest messages with id < before_id, oldest first."""
-        async with self.db.execute(
-            f"SELECT {_COLUMNS} FROM messages WHERE chat_id = ? AND message_id < ? ORDER BY message_id DESC LIMIT ?",
-            (chat_id, before_id, limit),
-        ) as cursor:
-            rows = await cursor.fetchall()
-        return [_row_to_message(row) for row in reversed(rows)]
+        return await self._newest("chat_id = ? AND message_id < ?", (chat_id, before_id), limit)
 
     async def user_messages_before(self, chat_id: int, user_id: int, before_id: int, limit: int) -> list[StoredMessage]:
         """One participant's `limit` newest messages with id < before_id, oldest first."""
-        async with self.db.execute(
-            f"SELECT {_COLUMNS} FROM messages WHERE chat_id = ? AND user_id = ? AND message_id < ? "
-            "AND is_bot = 0 ORDER BY message_id DESC LIMIT ?",
-            (chat_id, user_id, before_id, limit),
-        ) as cursor:
-            rows = await cursor.fetchall()
-        return [_row_to_message(row) for row in reversed(rows)]
+        return await self._newest(
+            "chat_id = ? AND user_id = ? AND message_id < ? AND is_bot = 0", (chat_id, user_id, before_id), limit
+        )
 
     async def messages_after(self, chat_id: int, after_id: int, limit: int) -> list[StoredMessage]:
         """The `limit` oldest messages with id > after_id, oldest first."""
-        async with self.db.execute(
-            f"SELECT {_COLUMNS} FROM messages WHERE chat_id = ? AND message_id > ? ORDER BY message_id LIMIT ?",
-            (chat_id, after_id, limit),
-        ) as cursor:
-            return [_row_to_message(row) for row in await cursor.fetchall()]
+        return await self._select(
+            "chat_id = ? AND message_id > ? ORDER BY message_id LIMIT ?", (chat_id, after_id, limit)
+        )
 
     async def messages_since(self, chat_id: int, since_ts: int, limit: int) -> list[StoredMessage]:
         """The `limit` newest messages created at or after since_ts, oldest first."""
-        async with self.db.execute(
-            f"SELECT {_COLUMNS} FROM messages WHERE chat_id = ? AND created_at >= ? ORDER BY message_id DESC LIMIT ?",
-            (chat_id, since_ts, limit),
-        ) as cursor:
-            rows = await cursor.fetchall()
-        return [_row_to_message(row) for row in reversed(rows)]
+        return await self._newest("chat_id = ? AND created_at >= ?", (chat_id, since_ts), limit)
 
     async def count_messages(self, chat_id: int, since_ts: int = 0) -> int:
         async with self.db.execute(

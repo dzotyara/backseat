@@ -1,10 +1,8 @@
 """aiogram handlers: commands and the stream of group messages."""
 
 import logging
-import re
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot, F, Router
@@ -14,7 +12,8 @@ from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import BotCommand, BotCommandScopeChat, BufferedInputFile, Document, Message
 
 from backseat import __version__
-from backseat.bot_config import BotConfig
+from backseat.bot_config import BotConfig, parse_names
+from backseat.commands import decode_prompt_file, is_prompt_file, is_reset, status_text
 from backseat.config import CoreSettings
 from backseat.llm import LLMClient
 from backseat.responder import Incoming, Responder
@@ -56,8 +55,6 @@ OWNER_HELP = """
 /status — модели, память по чатам, расходы и лимиты"""
 
 _GROUPS = F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP})
-_RESET_WORDS = {"сброс", "сбросить", "reset", "default"}
-_MAX_PROMPT_FILE_BYTES = 100_000
 _INLINE_PROMPT_LIMIT = 3500
 
 
@@ -95,21 +92,10 @@ def sender_of(message: Message) -> tuple[int, str, bool]:
 
 
 async def read_text_file(bot: Bot, document: Document) -> str | None:
-    is_text = (document.mime_type or "").startswith("text/") or (document.file_name or "").lower().endswith(
-        (".txt", ".md")
-    )
-    if not is_text or (document.file_size or 0) > _MAX_PROMPT_FILE_BYTES:
+    if not is_prompt_file(document.mime_type, document.file_name, document.file_size):
         return None
     buffer = await bot.download(document)
-    if buffer is None:
-        return None
-    raw = buffer.read()
-    for encoding in ("utf-8-sig", "cp1251"):
-        try:
-            return raw.decode(encoding).strip() or None
-        except UnicodeDecodeError:
-            continue
-    return None
+    return decode_prompt_file(buffer.read()) if buffer is not None else None
 
 
 def create_router(svc: Services) -> Router:
@@ -162,35 +148,14 @@ def create_router(svc: Services) -> Router:
     async def cmd_status(message: Message, bot: Bot) -> None:
         if not is_owner(message):
             return  # for everyone else the command does not exist
-        runtime = await svc.bot_config.runtime()  # .env values with the web panel's overrides
-        lines = [f"Бэксит v{__version__}", "Модели по порядку: " + " → ".join(runtime.models)]
-        if runtime.paused:
-            lines.append("⏸ На паузе: читаю и запоминаю, но молчу (включается в веб-панели)")
-        if svc.llm.last_model:
-            lines.append(f"Последний ответ дала: {svc.llm.last_model}")
         if message.chat.type == ChatType.PRIVATE:
             # From the private chat, report on the group chats the bot lives in.
-            chats = svc.settings.allowed_chat_ids or await svc.storage.active_chats(0)
-            labels = [f"Память чата {await chat_title(bot, chat_id)}" for chat_id in chats]
+            chat_ids = svc.settings.allowed_chat_ids or await svc.storage.active_chats(0)
+            chats = [(chat_id, f"Память чата {await chat_title(bot, chat_id)}") for chat_id in chat_ids]
         else:
-            chats, labels = [message.chat.id], ["Память этого чата"]
-        for chat_id, label in zip(chats, labels, strict=True):
-            memory = f"{label}: {await svc.storage.count_messages(chat_id)} сообщений"
-            summary = await svc.storage.get_summary(chat_id)
-            if summary:
-                memory += f", сводка обновлена {datetime.fromtimestamp(summary.updated_at, tz):%d.%m %H:%M}"
-            else:
-                memory += ", сводки пока нет"
-            lines.append(memory)
-        lines.append("Имена: " + ", ".join(await svc.bot_config.names()))
-        info = await svc.llm.key_info()
-        if info:
-            free = info.get("free_model_daily_requests") or {}
-            if free.get("limit") is not None:
-                lines.append(f"Бесплатные запросы сегодня: {free.get('used', 0)} из {free['limit']}")
-            if info.get("usage_daily") is not None:
-                lines.append(f"Потрачено сегодня: ${info['usage_daily']:.4f}")
-        await message.reply("\n".join(lines))
+            chats = [(message.chat.id, "Память этого чата")]
+        text = await status_text("Бэксит", chats, storage=svc.storage, bot_config=svc.bot_config, llm=svc.llm, tz=tz)
+        await message.reply(text)
 
     async def show_persona(message: Message) -> None:
         persona = await svc.bot_config.persona()
@@ -218,7 +183,7 @@ def create_router(svc: Services) -> Router:
             if text is None:
                 await message.reply("Не смог прочитать файл: нужен текстовый .txt или .md до 100 КБ.")
                 return
-        elif arg.casefold() in _RESET_WORDS:
+        elif is_reset(arg):
             await svc.bot_config.set_persona(None)
             await message.reply("Вернул характер по умолчанию.")
             return
@@ -239,12 +204,12 @@ def create_router(svc: Services) -> Router:
         if not is_owner(message):
             await deny(message)
             return
-        if arg.casefold() in _RESET_WORDS:
+        if is_reset(arg):
             await svc.bot_config.set_names(None)
             names = ", ".join(await svc.bot_config.names())
             await message.reply(f"Вернул имена по умолчанию: {names}")
             return
-        new_names = list(dict.fromkeys(name.strip() for name in re.split(r"[,;\n]+", arg) if name.strip()))
+        new_names = parse_names(arg)
         if not new_names:
             await message.reply("Не понял имена. Пример: /имена бэксит, ботяра")
             return

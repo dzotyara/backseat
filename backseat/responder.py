@@ -68,20 +68,20 @@ class Responder:
         llm: LLMClient,
         context: ContextBuilder,
         settings: CoreSettings,
+        bot_config: BotConfig,  # the runtime behaviour: .env defaults with the web panel's overrides
         me: BotIdentity,
         after_batch: Callable[[int], Awaitable[None]] | None = None,
         clock: Callable[[], float] = time.monotonic,
-        bot_config: BotConfig | None = None,
     ) -> None:
         self._transport = transport
         self._storage = storage
         self._llm = llm
         self._context = context
         self._settings = settings
+        self._bot_config = bot_config
         self._me = me
         self._after_batch = after_batch
         self._clock = clock
-        self._bot_config = bot_config  # runtime overrides from the web panel; None = settings only
         self._states: dict[int, _ChatState] = {}
         self._background: set[asyncio.Task[None]] = set()
 
@@ -124,7 +124,7 @@ class Responder:
                 return
             batch, state.pending, state.batch_started = state.pending, [], None
             try:
-                runtime = await self._runtime()
+                runtime = await self._bot_config.runtime()
                 if runtime.paused:
                     # The messages are stored already: a paused bot still remembers the chat.
                     log.info("chat=%s paused: %d message(s) left unanswered", chat_id, len(batch))
@@ -145,15 +145,8 @@ class Responder:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def _runtime(self) -> Runtime:
-        if self._bot_config is None:
-            return Runtime.from_settings(self._settings)
-        return await self._bot_config.runtime()
-
     async def _complete(self, messages: list[dict[str, str]], runtime: Runtime, **options: Any) -> Completion:
-        if self._bot_config is None:
-            return await self._llm.complete(messages, **options)  # the models the client was built with
-        return await self._llm.complete(messages, models=runtime.models, **options)
+        return await self._llm.complete(messages, models=runtime.models, **options)  # the panel's model order
 
     # --- addressed: always answer ---
 

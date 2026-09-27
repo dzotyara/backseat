@@ -47,20 +47,20 @@ async def run(settings: TelegramSettings) -> None:
     responder: Responder | None = None
     try:
         user = await bot.get_me()
-        me = BotIdentity(id=user.id, username=user.username or "", platform=transport.platform)
+        me = BotIdentity(id=user.id, username=user.username or "")
         formatter = LineFormatter(ZoneInfo(settings.timezone), settings.focus_users)
-        bot_config = BotConfig(storage, settings, platform=me.platform)
+        bot_config = BotConfig(storage, settings, platform=transport.platform)
         context = ContextBuilder(storage, bot_config, settings, me, formatter)
-        summarizer = Summarizer(storage, llm, settings, formatter, platform=me.platform, bot_config=bot_config)
+        summarizer = Summarizer(storage, llm, settings, formatter, bot_config=bot_config)
         responder = Responder(
             transport=transport,
             storage=storage,
             llm=llm,
             context=context,
             settings=settings,
+            bot_config=bot_config,
             me=me,
             after_batch=summarizer.maintain,
-            bot_config=bot_config,
         )
 
         dispatcher = Dispatcher()

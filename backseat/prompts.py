@@ -1,5 +1,7 @@
 """Service prompts. The persona (character) is separate: prompts/persona.md or /prompt."""
 
+from collections.abc import Mapping
+
 # Reactions the bot may use instead of a text reply: Telegram accepts only its standard set, Discord any emoji.
 REACTION_EMOJIS = ("😁", "🤣", "🔥", "👍", "🤡", "💩", "🗿", "🤔", "👀", "😭", "🥱", "🤯", "💯", "🙈", "🤝", "❤")
 
@@ -35,6 +37,12 @@ SYSTEM_TEMPLATE = """\
 {persona}"""
 
 PARTICIPANT_LINE = "- Постоянный участник: {name} — id {user_id}. В строках он всегда подписан «{name}».\n"
+
+
+def participant_lines(focus_users: Mapping[int, str]) -> str:
+    """A PARTICIPANT_LINE for each of FOCUS_USERS, for the chat and the summary system prompts."""
+    return "".join(PARTICIPANT_LINE.format(name=name, user_id=user_id) for user_id, name in focus_users.items())
+
 
 ADDRESSED_TASK = """\
 К тебе обратились в сообщении #{message_id} (автор — {author}). Ответь на него.

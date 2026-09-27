@@ -52,5 +52,5 @@ def test_split_message() -> None:
     chunks = split_message(text, limit=500)
     assert all(len(chunk) <= 500 for chunk in chunks)
     assert re.sub(r"\s", "", "".join(chunks)) == re.sub(r"\s", "", text)  # only whitespace at cuts is lost
-    assert split_message("коротко") == ["коротко"]
+    assert split_message("коротко", limit=500) == ["коротко"]
     assert split_message("x" * 1200, limit=500) == ["x" * 500, "x" * 500, "x" * 200]

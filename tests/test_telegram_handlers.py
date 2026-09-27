@@ -111,6 +111,7 @@ async def running_app(tmp_path: Path, **overrides: Any) -> AsyncIterator[SimpleN
         llm=llm,  # type: ignore[arg-type]
         context=context,
         settings=settings,
+        bot_config=bot_config,
         me=BOT,
     )
     dispatcher = Dispatcher()

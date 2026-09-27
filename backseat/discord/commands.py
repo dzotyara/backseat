@@ -7,11 +7,9 @@ again at runtime and always answered ephemerally — the persona names whom the 
 import io
 import logging
 import math
-import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -19,7 +17,8 @@ import discord
 from discord import app_commands
 
 from backseat import __version__
-from backseat.bot_config import BotConfig
+from backseat.bot_config import BotConfig, parse_names
+from backseat.commands import decode_prompt_file, is_prompt_file, is_reset, status_text
 from backseat.digest import WeeklyDigest
 from backseat.discord.messages import channel_allowed
 from backseat.discord.settings import DiscordSettings
@@ -51,8 +50,6 @@ OWNER_HELP = """
 
 NOT_OWNER = "Эта команда только для владельца бота."
 
-_RESET_WORDS = {"сброс", "сбросить", "reset", "default"}
-_MAX_PROMPT_FILE_BYTES = 100_000
 _WEEK_SECONDS = 7 * 24 * 3600
 
 
@@ -104,12 +101,12 @@ async def cmd_names(svc: Services, interaction: discord.Interaction, names: str 
         return
     if not await _owner_only(svc, interaction, "Менять имена может только владелец бота."):
         return
-    if arg.casefold() in _RESET_WORDS:
+    if is_reset(arg):
         await svc.bot_config.set_names(None)
         current = ", ".join(await svc.bot_config.names())
         await _private(interaction, f"Вернул имена по умолчанию: {current}")
         return
-    new_names = list(dict.fromkeys(name.strip() for name in re.split(r"[,;\n]+", arg) if name.strip()))
+    new_names = parse_names(arg)
     if not new_names:
         await _private(interaction, "Не понял имена. Пример: /names бэксит, ботяра")
         return
@@ -122,48 +119,27 @@ async def cmd_status(svc: Services, interaction: discord.Interaction) -> None:
         return
     # Discord waits only 3 seconds for an answer, OpenRouter may take longer.
     await interaction.response.defer(ephemeral=True, thinking=True)
-    tz = ZoneInfo(svc.settings.timezone)
-    runtime = await svc.bot_config.runtime()  # .env values with the web panel's overrides
-    lines = [f"{svc.me.username} v{__version__}", "Модели по порядку: " + " → ".join(runtime.models)]
-    if runtime.paused:
-        lines.append("⏸ На паузе: читаю и запоминаю, но молчу (включается в веб-панели)")
-    if svc.llm.last_model:
-        lines.append(f"Последний ответ дала: {svc.llm.last_model}")
-    for chat_id in svc.settings.allowed_chat_ids or [interaction.channel_id]:
-        memory = f"Память <#{chat_id}>: {await svc.storage.count_messages(chat_id)} сообщений"
-        summary = await svc.storage.get_summary(chat_id)
-        if summary:
-            memory += f", сводка обновлена {datetime.fromtimestamp(summary.updated_at, tz):%d.%m %H:%M}"
-        else:
-            memory += ", сводки пока нет"
-        lines.append(memory)
-    lines.append("Имена: " + ", ".join(await svc.bot_config.names()))
-    info = await svc.llm.key_info()
-    if info:
-        free = info.get("free_model_daily_requests") or {}
-        if free.get("limit") is not None:
-            lines.append(f"Бесплатные запросы сегодня: {free.get('used', 0)} из {free['limit']}")
-        if info.get("usage_daily") is not None:
-            lines.append(f"Потрачено сегодня: ${info['usage_daily']:.4f}")
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    chats = [(chat_id, f"Память <#{chat_id}>") for chat_id in svc.settings.allowed_chat_ids or [interaction.channel_id]]
+    text = await status_text(
+        svc.me.username,
+        chats,
+        storage=svc.storage,
+        bot_config=svc.bot_config,
+        llm=svc.llm,
+        tz=ZoneInfo(svc.settings.timezone),
+    )
+    await interaction.followup.send(text, ephemeral=True)
 
 
 async def read_text_attachment(attachment: discord.Attachment) -> str | None:
-    name = attachment.filename.lower()
-    is_text = (attachment.content_type or "").startswith("text/") or name.endswith((".txt", ".md"))
-    if not is_text or attachment.size > _MAX_PROMPT_FILE_BYTES:
+    if not is_prompt_file(attachment.content_type, attachment.filename, attachment.size):
         return None
     try:
         raw = await attachment.read()
     except discord.HTTPException as exc:
         log.warning("Could not download %s: %s", attachment.filename, exc)
         return None
-    for encoding in ("utf-8-sig", "cp1251"):
-        try:
-            return raw.decode(encoding).strip() or None
-        except UnicodeDecodeError:
-            continue
-    return None
+    return decode_prompt_file(raw)
 
 
 async def _show_persona(svc: Services, interaction: discord.Interaction) -> None:
@@ -186,7 +162,7 @@ async def cmd_prompt(
 ) -> None:
     if not await _owner_only(svc, interaction):
         return
-    if reset or (text or "").strip().casefold() in _RESET_WORDS:
+    if reset or is_reset(text):
         await svc.bot_config.set_persona(None)
         await _private(interaction, "Вернул характер по умолчанию.")
         return
