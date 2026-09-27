@@ -47,14 +47,14 @@ pydantic-settings. User-facing docs are in README.md (Russian).
    snowflakes, and the model must copy a number back to reply.
 4. `summarizer.py` folds the oldest unsummarized chunk into the summary as soon as the tail exceeds
    the verbatim window. Each fold rewrites the whole summary, so the prompt spells out its current
-   size: DeepSeek ignored the word limit, grew it to twice the size and got cut at max_tokens every
+   size: the model ignored the word limit, grew it to twice the size and got cut at max_tokens every
    time. The Discord adapter backfills `BACKFILL_DAYS` of history on first start (`discord/backfill.py`)
    and folds it all — for ~45k messages that is a few hundred folds.
 5. `digest.py` posts the weekly digest (Sunday 20:00 Europe/Moscow by default; the `meta` table
    prevents double posts); Discord's `/digest` uses `WeeklyDigest.compose` on demand.
 6. `llm.py` walks the model list in order, cools a model down after 402/403/404/429, and disables
    hidden reasoning by default (`REASONING=off`). `PROVIDERS` is sent as OpenRouter's provider order
-   with fallbacks: left alone, OpenRouter served DeepSeek from hosts 6-8x pricier than the cheapest.
+   with fallbacks: left alone, OpenRouter served the default model from hosts 6-8x pricier than the cheapest.
    Each call logs its model, tokens, cost, provider and cached tokens.
 
 ## Web panel contract

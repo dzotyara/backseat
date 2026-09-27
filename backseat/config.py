@@ -43,8 +43,8 @@ class CoreSettings(BaseSettings):
     )
     # off | low | medium | high — chat replies don't need a model's hidden reasoning.
     reasoning: str = "off"
-    # OpenRouter hosts to try first, e.g. "InferenceNet,Relace". A preference, not a filter: the rest
-    # stay as a fallback. Empty = OpenRouter picks, and for DeepSeek it picked hosts 6-8x pricier.
+    # OpenRouter hosts to try first, e.g. "Relace,Wafer". A preference, not a filter: the rest stay
+    # as a fallback. Empty = OpenRouter picks, and it picked hosts 6-8x pricier than the cheapest.
     providers: Annotated[list[str], NoDecode] = Field(default_factory=list)
     max_tokens: int = 1000
     request_timeout_seconds: float = 60.0
