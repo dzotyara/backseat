@@ -51,6 +51,7 @@ class LLMClient:
         self.last_model: str | None = None
         self._max_tokens = settings.max_tokens
         self._reasoning = settings.reasoning
+        self._providers = list(settings.providers)
         self._base_url = settings.openrouter_base_url.rstrip("/")
         self._clock = clock
         self._skip_until: dict[str, float] = {}
@@ -102,6 +103,9 @@ class LLMClient:
             payload["reasoning"] = {"enabled": False}
         else:
             payload["reasoning"] = {"effort": self._reasoning, "exclude": True}
+        if self._providers:
+            # Hosts that don't serve the model are skipped; if all listed ones fail, OpenRouter picks.
+            payload["provider"] = {"order": self._providers, "allow_fallbacks": True}
 
         try:
             response = await self._http.post(f"{self._base_url}/chat/completions", json=payload, headers=self._headers)
@@ -133,11 +137,13 @@ class LLMClient:
 
         usage = data.get("usage") or {}
         log.info(
-            "LLM model=%s prompt_tokens=%s completion_tokens=%s cost=%s",
+            "LLM model=%s prompt_tokens=%s completion_tokens=%s cost=%s provider=%s cached_tokens=%s",
             data.get("model") or model,
             usage.get("prompt_tokens"),
             usage.get("completion_tokens"),
             usage.get("cost"),
+            data.get("provider"),
+            (usage.get("prompt_tokens_details") or {}).get("cached_tokens"),
         )
         return Completion(
             text=text,

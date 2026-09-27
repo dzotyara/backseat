@@ -50,6 +50,7 @@ async def test_first_model_answers(settings: CoreSettings) -> None:
     payload = json.loads(requests[0].content)
     assert payload["model"] == "paid/model"
     assert payload["reasoning"] == {"enabled": False}
+    assert "provider" not in payload  # OpenRouter's own routing unless PROVIDERS is set
     assert payload["max_tokens"] == settings.max_tokens
     assert requests[0].headers["Authorization"] == "Bearer sk-test"
     assert str(requests[0].url) == "https://openrouter.ai/api/v1/chat/completions"
@@ -132,6 +133,18 @@ async def test_reasoning_effort_and_limits_are_passed(tmp_path: Path) -> None:
     assert payloads[0]["reasoning"] == {"effort": "low", "exclude": True}
     assert payloads[0]["max_tokens"] == 77
     assert payloads[0]["temperature"] == 0.2
+
+
+async def test_preferred_providers_keep_openrouters_fallback(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path, providers="InferenceNet, Relace")  # as it comes from .env
+    payloads: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payloads.append(json.loads(request.content))
+        return ok("ок")
+
+    await make_client(settings, handler).complete(PROMPT)
+    assert payloads[0]["provider"] == {"order": ["InferenceNet", "Relace"], "allow_fallbacks": True}
 
 
 async def test_key_info(settings: CoreSettings) -> None:
