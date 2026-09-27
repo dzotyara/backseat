@@ -36,7 +36,9 @@ pydantic-settings. User-facing docs are in README.md (Russian).
    one of its names, any reply to it — even a bare sticker) is always answered: the model gets no
    veto, and a fallback phrase is sent if every model fails. Otherwise the model answers with the
    protocol `SKIP` / `REPLY #n` + text / `REACT #n emoji`, parsed by `replies.parse_action`;
-   anything unparseable is a SKIP. While the bot is paused (web panel) batches are dropped, but the
+   anything unparseable is a SKIP. With `PRECHECK_CONTEXT_TOKENS` > 0 a cheap yes/no precheck on the
+   last few lines (no memory, same system prompt) gates that full call: in a busy Discord channel it
+   was ~300 full-context calls a day. While the bot is paused (web panel) batches are dropped, but the
    messages are already stored and the summary is still maintained.
 3. `context.py` builds the prompt: service rules + persona (system message), then ПАМЯТЬ ЧАТА
    (summary), ЧТО ПИСАЛИ РАНЬШЕ (older messages of `FOCUS_USERS` and of the new messages' authors),
@@ -44,12 +46,16 @@ pydantic-settings. User-facing docs are in README.md (Russian).
    Messages are numbered per prompt with `IdMap` (#1 = oldest shown): Discord ids are 19-digit
    snowflakes, and the model must copy a number back to reply.
 4. `summarizer.py` folds the oldest unsummarized chunk into the summary as soon as the tail exceeds
-   the verbatim window. The Discord adapter backfills `BACKFILL_DAYS` of history on first start
-   (`discord/backfill.py`) and folds it all.
+   the verbatim window. Each fold rewrites the whole summary, so the prompt spells out its current
+   size: DeepSeek ignored the word limit, grew it to twice the size and got cut at max_tokens every
+   time. The Discord adapter backfills `BACKFILL_DAYS` of history on first start (`discord/backfill.py`)
+   and folds it all — for ~45k messages that is a few hundred folds.
 5. `digest.py` posts the weekly digest (Sunday 20:00 Europe/Moscow by default; the `meta` table
    prevents double posts); Discord's `/digest` uses `WeeklyDigest.compose` on demand.
 6. `llm.py` walks the model list in order, cools a model down after 402/403/404/429, and disables
-   hidden reasoning by default (`REASONING=off`).
+   hidden reasoning by default (`REASONING=off`). `PROVIDERS` is sent as OpenRouter's provider order
+   with fallbacks: left alone, OpenRouter served DeepSeek from hosts 6-8x pricier than the cheapest.
+   Each call logs its model, tokens, cost, provider and cached tokens.
 
 ## Web panel contract
 

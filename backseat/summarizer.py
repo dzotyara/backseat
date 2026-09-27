@@ -7,7 +7,7 @@ import time
 from backseat.bot_config import BotConfig
 from backseat.config import CoreSettings
 from backseat.llm import LLMClient, LLMError
-from backseat.prompts import PARTICIPANT_LINE, SUMMARY_FOCUS_HINT, SUMMARY_SYSTEM
+from backseat.prompts import PARTICIPANT_LINE, SUMMARY_FOCUS_HINT, SUMMARY_SHRINK, SUMMARY_SYSTEM, SUMMARY_USER
 from backseat.render import IdMap, LineFormatter
 from backseat.storage import Storage
 
@@ -81,10 +81,15 @@ class Summarizer:
             focus_hint=focus_hint,
             max_words=settings.summary_max_words,
         )
-        previous = summary.text if summary else "(пока пусто)"
-        # The chunk is numbered on its own: replies to messages outside it show a bare "↩".
-        lines = self._formatter.lines(chunk, IdMap(message.message_id for message in chunk))
-        user = f"ТЕКУЩАЯ СВОДКА:\n{previous}\n\nСЛЕДУЮЩИЙ КУСОК ПЕРЕПИСКИ:\n{lines}"
+        words = len(summary.text.split()) if summary else 0
+        user = SUMMARY_USER.format(
+            size=f" (слов: {words})" if summary else "",
+            previous=summary.text if summary else "(пока пусто)",
+            # The chunk is numbered on its own: replies to messages outside it show a bare "↩".
+            lines=self._formatter.lines(chunk, IdMap(message.message_id for message in chunk)),
+            max_words=settings.summary_max_words,
+            shrink=SUMMARY_SHRINK if words > settings.summary_max_words else "",
+        )
         panel = {"models": (await self._bot_config.runtime()).models} if self._bot_config else {}
         completion = await self._llm.complete(
             [{"role": "system", "content": system}, {"role": "user", "content": user}],
@@ -92,8 +97,11 @@ class Summarizer:
             temperature=0.2,
             **panel,
         )
+        text = completion.text.strip()
         if completion.finish_reason == "length":
+            # Keep whole lines only: a sentence cut in half would be carried into every later summary.
+            text = text.rsplit("\n", 1)[0].rstrip() if "\n" in text else text
             log.warning("chat=%s the summary hit max_tokens and was cut; lower SUMMARY_MAX_WORDS", chat_id)
-        await self._storage.set_summary(chat_id, completion.text.strip(), chunk[-1].message_id, int(time.time()))
+        await self._storage.set_summary(chat_id, text, chunk[-1].message_id, int(time.time()))
         log.info("chat=%s summary now covers up to message %s (%d folded)", chat_id, chunk[-1].message_id, len(chunk))
         return True

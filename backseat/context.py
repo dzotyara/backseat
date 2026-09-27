@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from backseat.bot_config import BotConfig
 from backseat.config import CoreSettings
-from backseat.prompts import DIGEST_TASK, PARTICIPANT_LINE, SYSTEM_TEMPLATE
+from backseat.prompts import DIGEST_TASK, PARTICIPANT_LINE, PRECHECK_TASK, SYSTEM_TEMPLATE
 from backseat.render import IdMap, LineFormatter
 from backseat.storage import Storage, StoredMessage
 from backseat.triggers import BotIdentity
@@ -15,6 +15,7 @@ ChatMessages = list[dict[str, str]]
 # How many rows to read before trimming to the token budgets.
 _RECENT_FETCH = 600
 _HISTORY_FETCH = 300
+_PRECHECK_FETCH = 200
 _DIGEST_FETCH = 3000
 _DIGEST_TOKENS = 20000
 
@@ -56,6 +57,16 @@ class ContextBuilder:
         """`task` gets the numbering so it can point at a message ("#3")."""
         return await self._render(chat_id, await self._sections(chat_id, new), task)
 
+    async def for_precheck(self, chat_id: int, new: list[StoredMessage]) -> Prompt:
+        """The cheap first look before an unprompted comment: the same system prompt (a cache prefix
+        shared with the full prompt), the last few lines and the new ones, no memory."""
+        first_new = min(message.message_id for message in new)
+        candidates = await self._storage.messages_before(chat_id, first_new, _PRECHECK_FETCH)
+        window = self.formatter.newest_within(candidates, self._settings.precheck_context_tokens)
+        sections = [("ПОСЛЕДНЯЯ ПЕРЕПИСКА", window)] if window else []
+        sections.append(("НОВОЕ", new))
+        return await self._render(chat_id, sections, lambda ids: PRECHECK_TASK, memory=False)
+
     async def for_digest(self, chat_id: int, since_ts: int) -> Prompt:
         week = await self._storage.messages_since(chat_id, since_ts, _DIGEST_FETCH)
         picked = self.formatter.newest_within(week, _DIGEST_TOKENS)
@@ -63,11 +74,16 @@ class ContextBuilder:
         return await self._render(chat_id, sections, lambda ids: DIGEST_TASK)
 
     async def _render(
-        self, chat_id: int, sections: list[tuple[str, list[StoredMessage]]], task: Callable[[IdMap], str]
+        self,
+        chat_id: int,
+        sections: list[tuple[str, list[StoredMessage]]],
+        task: Callable[[IdMap], str],
+        *,
+        memory: bool = True,
     ) -> Prompt:
         ids = IdMap(message.message_id for _, messages in sections for message in messages)
         parts = []
-        summary = await self._storage.get_summary(chat_id)
+        summary = await self._storage.get_summary(chat_id) if memory else None
         if summary:
             parts.append(f"ПАМЯТЬ ЧАТА:\n{summary.text}")
         parts += [f"{title}:\n{self.formatter.lines(messages, ids)}" for title, messages in sections]

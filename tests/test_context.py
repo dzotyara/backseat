@@ -102,3 +102,24 @@ async def test_digest_context_covers_the_week(
     assert "древность" not in user["content"]
     assert "Итоги недели" in user["content"]
     assert prompt.ids.real(1) == 2
+
+
+async def test_precheck_sees_only_the_latest_lines_and_no_memory(
+    tmp_path: Path, storage: Storage, formatter: LineFormatter
+) -> None:
+    settings = make_settings(tmp_path, precheck_context_tokens=40)
+    for i in range(1, 30):
+        await storage.add_message(msg(i, f"болтовня номер {i}"))
+    await storage.set_summary(CHAT, "Иван обещал бегать по утрам.", 10, BASE_TS)
+    new = [msg(30, "я теперь марафонец", user_id=IVAN, author="Vanya")]
+    await storage.add_message(new[0])
+
+    builder = ContextBuilder(storage, BotConfig(storage, settings), settings, BOT, formatter)
+    precheck = await builder.for_precheck(CHAT, new)
+    full = await builder.for_reply(CHAT, new, lambda ids: "ЗАДАЧА")
+    assert precheck.messages[0] == full.messages[0]  # the same system prompt: a cache prefix both share
+    body = precheck.messages[1]["content"]
+    assert "ПАМЯТЬ ЧАТА" not in body and "ЧТО ПИСАЛИ РАНЬШЕ" not in body
+    assert "болтовня номер 29" in body and "болтовня номер 20" not in body
+    assert "НОВОЕ:\n" in body and "Иван[700000001]: я теперь марафонец" in body
+    assert body.endswith("Ответь одним словом: ДА или НЕТ.")

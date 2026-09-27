@@ -8,9 +8,11 @@ to reply. Otherwise the model may comment, react with an emoji, or stay silent.
 import asyncio
 import logging
 import random
+import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 from backseat.bot_config import BotConfig, Runtime
 from backseat.config import CoreSettings
@@ -29,6 +31,8 @@ from backseat.transport import Sent, Transport
 from backseat.triggers import BotIdentity
 
 log = logging.getLogger(__name__)
+
+_YES_RE = re.compile(r"\W*(?:да|yes)(?!\w)", re.IGNORECASE)  # the precheck's answer, "ДА" or "НЕТ"
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,10 +150,10 @@ class Responder:
             return Runtime.from_settings(self._settings)
         return await self._bot_config.runtime()
 
-    async def _complete(self, messages: list[dict[str, str]], runtime: Runtime) -> Completion:
+    async def _complete(self, messages: list[dict[str, str]], runtime: Runtime, **options: Any) -> Completion:
         if self._bot_config is None:
-            return await self._llm.complete(messages)  # the models the client was built with
-        return await self._llm.complete(messages, models=runtime.models)
+            return await self._llm.complete(messages, **options)  # the models the client was built with
+        return await self._llm.complete(messages, models=runtime.models, **options)
 
     # --- addressed: always answer ---
 
@@ -196,6 +200,8 @@ class Responder:
         messages = await self._storage.get_messages(chat_id, [item.message_id for item in batch])
         if not any(not message.is_bot for message in messages):
             return
+        if self._settings.precheck_context_tokens > 0 and not await self._worth_a_look(chat_id, messages, runtime):
+            return
         task, emojis = _unprompted_task(runtime.reactions_enabled)
         prompt = await self._context.for_reply(chat_id, messages, lambda ids: task)
         try:
@@ -211,6 +217,19 @@ class Responder:
         elif action.kind == "react" and target is not None:
             await self._transport.react(chat_id, target, action.emoji)
         log.info("chat=%s unprompted=%s target=%s model=%s", chat_id, action.kind, target, completion.model)
+
+    async def _worth_a_look(self, chat_id: int, messages: list[StoredMessage], runtime: Runtime) -> bool:
+        """The cheap first look: a few recent lines, one word back. In a busy chat most batches end here."""
+        prompt = await self._context.for_precheck(chat_id, messages)
+        try:
+            completion = await self._complete(prompt.messages, runtime, max_tokens=5, temperature=0.0)
+        except LLMError as exc:
+            log.warning("chat=%s precheck skipped, every model failed: %s", chat_id, exc)
+            return False
+        if _YES_RE.match(completion.text):
+            return True
+        log.info("chat=%s skip: precheck", chat_id)
+        return False
 
     # --- output ---
 

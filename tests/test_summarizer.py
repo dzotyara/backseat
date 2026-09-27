@@ -44,13 +44,28 @@ async def test_oldest_chunk_is_folded_into_the_summary(
     assert "долговременную память группового чата в Telegram" in prompt
     assert "ТЕКУЩАЯ СВОДКА:\n(пока пусто)" in prompt
     assert "#1 " in prompt and "#40 " not in prompt
-    assert "Про Иван пиши подробнее всех" in prompt
+    assert "Про Иван — подробнее всех" in prompt
+    assert "не больше 900 слов, все четыре раздела." in prompt
     assert 1 < first.upto_message_id < 40
 
     assert await summarizer.update_once(CHAT)
     second = await storage.get_summary(CHAT)
     assert second is not None and second.upto_message_id > first.upto_message_id
-    assert "ТЕКУЩАЯ СВОДКА:\nСводка 1" in llm.prompt_text()
+    assert "ТЕКУЩАЯ СВОДКА (слов: 2):\nСводка 1" in llm.prompt_text()
+    assert "ужми" not in llm.prompt_text()
+
+
+async def test_an_oversized_summary_is_told_to_shrink(
+    tmp_path: Path, storage: Storage, formatter: LineFormatter
+) -> None:
+    settings = make_settings(tmp_path, recent_context_tokens=100, summary_chunk_tokens=100, summary_max_words=5)
+    await fill(storage, 40)
+    await storage.set_summary(CHAT, "раз два три четыре пять шесть семь", 0, 0)
+    llm = FakeLLM("Короче")
+    assert await Summarizer(storage, llm, settings, formatter).update_once(CHAT)  # type: ignore[arg-type]
+    prompt = llm.prompt_text()
+    assert "ТЕКУЩАЯ СВОДКА (слов: 7):\nраз два" in prompt
+    assert prompt.endswith("не больше 5 слов, все четыре раздела. Текущая сводка длиннее лимита — ужми её.")
 
 
 async def test_each_chunk_is_numbered_on_its_own(tmp_path: Path, storage: Storage, formatter: LineFormatter) -> None:
@@ -100,7 +115,9 @@ async def test_the_summary_gets_room_and_a_cut_is_logged(
             completion = await super().complete(messages, **options)
             return dataclasses.replace(completion, finish_reason="length")
 
-    llm = CutLLM("Сводка, обрезанная на полусл")
+    llm = CutLLM("## Хроника\n- 20.09 Петя купил кроссовки\n## Участники\n- Петя обещал бегать по утр")
     assert await Summarizer(storage, llm, settings, formatter).update_once(CHAT)  # type: ignore[arg-type]
     assert llm.options[0]["max_tokens"] == 500 * 6
     assert "hit max_tokens" in caplog.text
+    summary = await storage.get_summary(CHAT)  # the half-written last line is dropped
+    assert summary is not None and summary.text == "## Хроника\n- 20.09 Петя купил кроссовки\n## Участники"

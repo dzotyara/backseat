@@ -66,6 +66,9 @@ class CoreSettings(BaseSettings):
     max_batch_wait_seconds: float = 20.0
     max_batch_messages: int = 15
     unprompted_cooldown_seconds: float = 60.0
+    # Before a comment nobody asked for, first show the model only this many tokens of the latest chat and
+    # ask yes/no; the full prompt with the chat's memory is paid for only on "yes". 0 = always the full prompt.
+    precheck_context_tokens: int = 0
 
     # Rough token budgets for the prompt sections (1 token ~ 3 characters).
     recent_context_tokens: int = 8000

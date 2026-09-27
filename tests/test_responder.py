@@ -254,3 +254,55 @@ async def test_bots_own_reply_shows_up_in_the_next_context(tmp_path: Path, stora
     assert numbered(prompt, "Ты опять про бег?") == "#2"
     assert transport.sent[-1].reply_to == 7
     await responder.shutdown()
+
+
+async def test_precheck_no_costs_only_the_short_request(tmp_path: Path, storage: Storage) -> None:
+    settings = make_settings(tmp_path, precheck_context_tokens=500, **SLOW)
+    llm, transport = FakeLLM("НЕТ"), FakeTransport()
+    responder = make_responder(settings, storage, llm, transport)
+    await storage.set_summary(CHAT, "Иван обещал бегать.", 0, 0)
+    responder.enqueue(CHAT, await add(storage, 5, "пойду спать"))
+    await responder.process(CHAT)
+    assert len(llm.calls) == 1
+    assert "Иван обещал бегать" not in llm.prompt_text()  # no memory in the short request
+    assert llm.prompt_text().endswith("Ответь одним словом: ДА или НЕТ.")
+    assert llm.options[0]["max_tokens"] == 5
+    assert transport.sent == [] and transport.reactions == []
+    await responder.shutdown()
+
+
+async def test_precheck_yes_leads_to_the_full_decision(tmp_path: Path, storage: Storage) -> None:
+    settings = make_settings(tmp_path, precheck_context_tokens=500, **SLOW)
+    llm, transport = FakeLLM("Да.", "REPLY #1\nС понедельника, как обычно?"), FakeTransport()
+    responder = make_responder(settings, storage, llm, transport)
+    await storage.set_summary(CHAT, "Иван обещал бегать.", 0, 0)
+    responder.enqueue(CHAT, await add(storage, 5, "всё, завтра начинаю бегать"))
+    await responder.process(CHAT)
+    assert len(llm.calls) == 2
+    assert "ПАМЯТЬ ЧАТА:\nИван обещал бегать." in llm.prompt_text(1)
+    assert [(s.reply_to, s.text) for s in transport.sent] == [(5, "С понедельника, как обычно?")]
+    await responder.shutdown()
+
+
+async def test_failed_precheck_is_a_skip(tmp_path: Path, storage: Storage) -> None:
+    settings = make_settings(tmp_path, precheck_context_tokens=500, **SLOW)
+    llm, transport = FakeLLM(LLMError("all down")), FakeTransport()
+    responder = make_responder(settings, storage, llm, transport)
+    responder.enqueue(CHAT, await add(storage, 5, "всё, завтра начинаю бегать"))
+    await responder.process(CHAT)
+    assert len(llm.calls) == 1
+    assert transport.sent == []
+    await responder.shutdown()
+
+
+async def test_calls_to_the_bot_skip_the_precheck(tmp_path: Path, storage: Storage) -> None:
+    settings = make_settings(tmp_path, precheck_context_tokens=500, **SLOW)
+    llm, transport = FakeLLM("Тут я."), FakeTransport()
+    responder = make_responder(settings, storage, llm, transport)
+    await add(storage, 5, "ботяра, ты тут?")
+    responder.enqueue(CHAT, Incoming(5, IVAN, addressed=True, trivial=False))
+    await responder.process(CHAT)
+    assert len(llm.calls) == 1
+    assert "ДА или НЕТ" not in llm.prompt_text()
+    assert [(s.reply_to, s.text) for s in transport.sent] == [(5, "Тут я.")]
+    await responder.shutdown()
