@@ -4,10 +4,10 @@ import asyncio
 import logging
 import time
 
-from backseat.config import Settings
+from backseat.config import CoreSettings
 from backseat.llm import LLMClient, LLMError
 from backseat.prompts import PARTICIPANT_LINE, SUMMARY_FOCUS_HINT, SUMMARY_SYSTEM
-from backseat.render import LineFormatter, estimate_tokens
+from backseat.render import IdMap, LineFormatter
 from backseat.storage import Storage
 
 log = logging.getLogger(__name__)
@@ -17,11 +17,20 @@ _SUMMARY_MAX_TOKENS = 3000
 
 
 class Summarizer:
-    def __init__(self, storage: Storage, llm: LLMClient, settings: Settings, formatter: LineFormatter) -> None:
+    def __init__(
+        self,
+        storage: Storage,
+        llm: LLMClient,
+        settings: CoreSettings,
+        formatter: LineFormatter,
+        *,
+        platform: str = "Telegram",  # the summary prompt names it, like BotIdentity.platform
+    ) -> None:
         self._storage = storage
         self._llm = llm
         self._settings = settings
         self._formatter = formatter
+        self._platform = platform
         self._locks: dict[int, asyncio.Lock] = {}
 
     async def maintain(self, chat_id: int) -> None:
@@ -42,7 +51,7 @@ class Summarizer:
         summary = await self._storage.get_summary(chat_id)
         upto = summary.upto_message_id if summary else 0
         tail = await self._storage.messages_after(chat_id, upto, _TAIL_FETCH)
-        costs = [estimate_tokens(self._formatter.line(message)) for message in tail]
+        costs = [self._formatter.cost(message) for message in tail]
         # Fold as soon as something falls out of the verbatim window, so every message is always
         # either quoted or summarized. Folding the oldest chunk may overlap the window — harmless.
         if sum(costs) <= settings.recent_context_tokens:
@@ -62,10 +71,15 @@ class Summarizer:
             SUMMARY_FOCUS_HINT.format(names=", ".join(settings.focus_users.values())) if settings.focus_users else ""
         )
         system = SUMMARY_SYSTEM.format(
-            participants=participants, focus_hint=focus_hint, max_words=settings.summary_max_words
+            platform=self._platform,
+            participants=participants,
+            focus_hint=focus_hint,
+            max_words=settings.summary_max_words,
         )
         previous = summary.text if summary else "(пока пусто)"
-        user = f"ТЕКУЩАЯ СВОДКА:\n{previous}\n\nСЛЕДУЮЩИЙ КУСОК ПЕРЕПИСКИ:\n{self._formatter.lines(chunk)}"
+        # The chunk is numbered on its own: replies to messages outside it show a bare "↩".
+        lines = self._formatter.lines(chunk, IdMap(message.message_id for message in chunk))
+        user = f"ТЕКУЩАЯ СВОДКА:\n{previous}\n\nСЛЕДУЮЩИЙ КУСОК ПЕРЕПИСКИ:\n{lines}"
         completion = await self._llm.complete(
             [{"role": "system", "content": system}, {"role": "user", "content": user}],
             max_tokens=_SUMMARY_MAX_TOKENS,

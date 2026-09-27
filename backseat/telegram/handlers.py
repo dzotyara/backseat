@@ -15,12 +15,12 @@ from aiogram.types import BotCommand, BotCommandScopeChat, BufferedInputFile, Do
 
 from backseat import __version__
 from backseat.bot_config import BotConfig
-from backseat.config import Settings
+from backseat.config import CoreSettings
 from backseat.llm import LLMClient
-from backseat.render import describe_message
 from backseat.responder import Incoming, Responder
 from backseat.storage import Storage, StoredMessage
-from backseat.triggers import BotIdentity, find_address, is_trivial
+from backseat.telegram.messages import describe_message, find_address, is_trivial
+from backseat.triggers import BotIdentity
 
 log = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ _INLINE_PROMPT_LIMIT = 3500
 
 @dataclass(frozen=True, slots=True)
 class Services:
-    settings: Settings
+    settings: CoreSettings
     storage: Storage
     bot_config: BotConfig
     llm: LLMClient
@@ -167,7 +167,7 @@ def create_router(svc: Services) -> Router:
             lines.append(f"Последний ответ дала: {svc.llm.last_model}")
         if message.chat.type == ChatType.PRIVATE:
             # From the private chat, report on the group chats the bot lives in.
-            chats = svc.settings.allowed_chat_ids or await svc.storage.active_group_chats(0)
+            chats = svc.settings.allowed_chat_ids or await svc.storage.active_chats(0)
             labels = [f"Память чата {await chat_title(bot, chat_id)}" for chat_id in chats]
         else:
             chats, labels = [message.chat.id], ["Память этого чата"]

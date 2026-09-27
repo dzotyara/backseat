@@ -11,4 +11,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backseat ./backseat
 COPY prompts ./prompts
 
-CMD ["python", "-m", "backseat"]
+CMD ["python", "-m", "backseat.telegram"]

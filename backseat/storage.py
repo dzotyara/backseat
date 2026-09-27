@@ -189,10 +189,11 @@ class Storage:
             row = await cursor.fetchone()
         return row[0] if row else 0
 
-    async def active_group_chats(self, since_ts: int) -> list[int]:
-        """Group chats (negative ids) that had messages at or after since_ts."""
+    async def active_chats(self, since_ts: int) -> list[int]:
+        """Chats that had messages at or after since_ts. Each bot has its own database,
+        so these are exactly the chats this bot lives in."""
         async with self.db.execute(
-            "SELECT DISTINCT chat_id FROM messages WHERE chat_id < 0 AND created_at >= ?",
+            "SELECT DISTINCT chat_id FROM messages WHERE created_at >= ?",
             (since_ts,),
         ) as cursor:
             return [row[0] for row in await cursor.fetchall()]

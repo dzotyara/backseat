@@ -5,7 +5,7 @@ import json
 import logging
 import re
 
-from backseat.config import Settings
+from backseat.config import CoreSettings
 from backseat.prompts import FALLBACK_PERSONA
 from backseat.storage import Storage
 from backseat.triggers import compile_names
@@ -19,7 +19,7 @@ NAMES_KEY = "names"
 
 
 class BotConfig:
-    def __init__(self, storage: Storage, settings: Settings) -> None:
+    def __init__(self, storage: Storage, settings: CoreSettings) -> None:
         self._storage = storage
         self._settings = settings
         self._name_pattern: re.Pattern[str] | None = None

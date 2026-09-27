@@ -22,7 +22,15 @@ async def test_ordering_and_windows(storage: Storage) -> None:
     assert [m.message_id for m in await storage.get_messages(CHAT, [5, 2, 99])] == [2, 5]
     assert await storage.count_messages(CHAT) == 7
     assert await storage.count_messages(CHAT, since_ts=BASE_TS + 5 * 60) == 3
-    assert await storage.active_group_chats(0) == [CHAT]
+    assert await storage.active_chats(0) == [CHAT]
+
+
+async def test_active_chats_are_all_chats_with_recent_messages(storage: Storage) -> None:
+    channel = 1_300_000_000_000_000_000  # a Discord channel: positive, unlike Telegram groups
+    await storage.add_message(msg(1, "давно", ts=BASE_TS - 3600))
+    await storage.add_message(msg(1, "сегодня", ts=BASE_TS, chat_id=channel))
+    assert sorted(await storage.active_chats(0)) == [CHAT, channel]
+    assert await storage.active_chats(BASE_TS) == [channel]
 
 
 async def test_bot_messages_are_excluded_from_personal_history(storage: Storage) -> None:

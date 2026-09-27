@@ -15,9 +15,7 @@ class Transport(Protocol):
     platform: str  # "Telegram" / "Discord" — the prompts mention it
     max_length: int  # longest message the platform accepts
 
-    async def send(
-        self, chat_id: int, text: str, *, reply_to: int | None = None, notify: bool = False
-    ) -> Sent | None:
+    async def send(self, chat_id: int, text: str, *, reply_to: int | None = None, notify: bool = False) -> Sent | None:
         """Post a message, as a reply if reply_to is set; notify pings that message's author
         where the platform can. Returns None when the platform refused."""
         ...

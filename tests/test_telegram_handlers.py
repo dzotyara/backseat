@@ -1,7 +1,9 @@
 """End-to-end through aiogram's Dispatcher with the Telegram API replaced by a recording session."""
 
+import asyncio
 import contextlib
 import itertools
+import time
 from collections.abc import AsyncGenerator, AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,15 +14,31 @@ from zoneinfo import ZoneInfo
 import pytest
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.base import BaseSession
-from aiogram.methods import GetChat, GetFile, GetMe, SendDocument, SendMessage, SetMyCommands, TelegramMethod
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.methods import (
+    GetChat,
+    GetFile,
+    GetMe,
+    SendChatAction,
+    SendDocument,
+    SendMessage,
+    SetMessageReaction,
+    SetMyCommands,
+    TelegramMethod,
+)
 from aiogram.types import Chat, File, Message, User
+from pydantic import ValidationError
 
+from backseat import __main__ as legacy_entrypoint
 from backseat.bot_config import BotConfig
 from backseat.context import ContextBuilder
-from backseat.handlers import Services, create_router, register_commands
 from backseat.render import LineFormatter
 from backseat.responder import Responder
 from backseat.storage import Storage
+from backseat.telegram import __main__ as telegram_entrypoint
+from backseat.telegram.handlers import Services, create_router, register_commands
+from backseat.telegram.settings import TelegramSettings
+from backseat.telegram.transport import TelegramTransport
 from tests.conftest import BASE_TS, BOT, CHAT, IVAN, OWNER, FakeLLM, make_settings
 
 _ids = itertools.count(100)
@@ -31,9 +49,12 @@ class RecordingSession(BaseSession):
         super().__init__()
         self.requests: list[TelegramMethod[Any]] = []
         self.file_bytes = b""
+        self.rejected: set[type[TelegramMethod[Any]]] = set()  # methods Telegram answers with an error
 
     async def make_request(self, bot: Bot, method: TelegramMethod[Any], timeout: int | None = None) -> Any:
         self.requests.append(method)
+        if type(method) in self.rejected:
+            raise TelegramBadRequest(method=method, message="Bad Request: rejected by the test")
         if isinstance(method, GetMe):
             return User(id=BOT.id, is_bot=True, first_name="Backseat", username=BOT.username)
         if isinstance(method, GetFile):
@@ -63,46 +84,57 @@ class RecordingSession(BaseSession):
     async def close(self) -> None:
         pass
 
+    def of[M: TelegramMethod[Any]](self, kind: type[M]) -> list[M]:
+        return [m for m in self.requests if isinstance(m, kind)]
+
     def texts(self) -> list[str]:
-        return [m.text for m in self.requests if isinstance(m, SendMessage)]
-
-    def documents(self) -> list[SendDocument]:
-        return [m for m in self.requests if isinstance(m, SendDocument)]
+        return [m.text for m in self.of(SendMessage)]
 
 
-@pytest.fixture
-async def app(tmp_path: Path) -> AsyncIterator[SimpleNamespace]:
-    settings = make_settings(
-        tmp_path,
-        allowed_chat_ids=[CHAT],
-        debounce_seconds=999,
-        addressed_debounce_seconds=999,
-        max_batch_wait_seconds=999,
-    )
+@contextlib.asynccontextmanager
+async def running_app(tmp_path: Path, **overrides: Any) -> AsyncIterator[SimpleNamespace]:
+    """The Telegram side wired as in app.py; batches are processed only when a test calls process()."""
+    slow = {"debounce_seconds": 999, "addressed_debounce_seconds": 999, "max_batch_wait_seconds": 999}
+    settings = make_settings(tmp_path, **{**slow, **overrides})
     storage = Storage(settings.db_path)
     await storage.connect()
     session = RecordingSession()
     bot = Bot("42:TEST", session=session)
+    transport = TelegramTransport(bot)
     llm = FakeLLM()
     bot_config = BotConfig(storage, settings)
     formatter = LineFormatter(ZoneInfo(settings.timezone), settings.focus_users)
     context = ContextBuilder(storage, bot_config, settings, BOT, formatter)
     responder = Responder(
-        bot=bot,
+        transport=transport,
         storage=storage,
         llm=llm,  # type: ignore[arg-type]
         context=context,
         settings=settings,
         me=BOT,
-        typing=lambda chat_id: contextlib.nullcontext(),
     )
     dispatcher = Dispatcher()
     dispatcher.include_router(create_router(Services(settings, storage, bot_config, llm, responder, BOT)))  # type: ignore[arg-type]
-    yield SimpleNamespace(
-        bot=bot, dp=dispatcher, session=session, storage=storage, llm=llm, responder=responder, bot_config=bot_config
-    )
-    await responder.shutdown()
-    await storage.close()
+    try:
+        yield SimpleNamespace(
+            bot=bot,
+            dp=dispatcher,
+            session=session,
+            transport=transport,
+            storage=storage,
+            llm=llm,
+            responder=responder,
+            bot_config=bot_config,
+        )
+    finally:
+        await responder.shutdown()
+        await storage.close()
+
+
+@pytest.fixture
+async def app(tmp_path: Path) -> AsyncIterator[SimpleNamespace]:
+    async with running_app(tmp_path, allowed_chat_ids=[CHAT]) as running:
+        yield running
 
 
 async def feed(
@@ -144,8 +176,12 @@ async def test_group_message_is_remembered_and_a_call_by_name_is_answered(app: S
 
     await app.responder.process(CHAT)
     assert app.session.texts() == ["Слушаю, Иван."]
-    reply = next(m for m in app.session.requests if isinstance(m, SendMessage))
+    reply = app.session.of(SendMessage)[0]
     assert reply.reply_parameters.message_id == second
+    # The model sees the chat numbered from #1, not Telegram's message ids.
+    assert "К тебе обратились в сообщении #2 (автор — Иван[700000001])" in app.llm.prompt_text()
+    [remembered] = await app.storage.messages_after(CHAT, second, 10)
+    assert (remembered.is_bot, remembered.reply_to, remembered.text) == (True, second, "Слушаю, Иван.")
 
 
 async def test_a_bare_sticker_reply_to_the_bot_is_answered_too(app: SimpleNamespace) -> None:
@@ -169,8 +205,27 @@ async def test_a_bare_sticker_reply_to_the_bot_is_answered_too(app: SimpleNamesp
     }
     reply = await feed(app, sticker=sticker, reply_to_message=bot_message)
     await app.responder.process(CHAT)
-    sent = next(m for m in app.session.requests if isinstance(m, SendMessage))
+    sent = app.session.of(SendMessage)[0]
     assert (sent.text, sent.reply_parameters.message_id) == ("Рад, что зашло.", reply)
+
+
+async def test_unprompted_reply_lands_on_the_message_the_model_numbered(app: SimpleNamespace) -> None:
+    question = await feed(app, "кто на шашлыки в субботу?")
+    await feed(app, "я, но без машины")
+    app.llm.answers = ["REPLY #1\nА мясо кто везёт?"]
+    await app.responder.process(CHAT)
+    reply = app.session.of(SendMessage)[0]
+    assert (reply.text, reply.reply_parameters.message_id) == ("А мясо кто везёт?", question)
+
+
+async def test_unprompted_reaction_lands_on_the_message_the_model_numbered(app: SimpleNamespace) -> None:
+    boast = await feed(app, "я сегодня пробежал 10 км")
+    await feed(app, "ну или 5")
+    app.llm.answers = ["REACT #1 🤡"]
+    await app.responder.process(CHAT)
+    [reaction] = app.session.of(SetMessageReaction)
+    assert (reaction.chat_id, reaction.message_id, reaction.reaction[0].emoji) == (CHAT, boast, "🤡")
+    assert app.session.texts() == []
 
 
 async def test_owner_renames_the_bot_in_cyrillic(app: SimpleNamespace) -> None:
@@ -221,12 +276,12 @@ async def test_prompt_from_a_text_file(app: SimpleNamespace) -> None:
 async def test_long_prompt_is_shown_as_a_file(app: SimpleNamespace) -> None:
     await app.bot_config.set_persona("длинно " * 1000)
     await feed(app, "/prompt", user_id=OWNER, chat_id=OWNER)
-    assert len(app.session.documents()) == 1
+    assert len(app.session.of(SendDocument)) == 1
 
 
 async def test_owner_commands_are_only_in_the_owners_menu_and_help(app: SimpleNamespace) -> None:
     await register_commands(app.bot, [OWNER])
-    public, owner = [m for m in app.session.requests if isinstance(m, SetMyCommands)]
+    public, owner = app.session.of(SetMyCommands)
     assert public.scope is None
     assert {"prompt", "status"}.isdisjoint(c.command for c in public.commands)
     assert owner.scope.chat_id == OWNER
@@ -263,6 +318,14 @@ async def test_status_is_owner_only(app: SimpleNamespace) -> None:
     assert "Память чата «Чат»: 1 сообщений" in app.session.texts()[-1]
 
 
+async def test_status_in_private_covers_every_chat_the_bot_remembers(tmp_path: Path) -> None:
+    async with running_app(tmp_path) as app:  # no ALLOWED_CHAT_IDS: the chats come from memory
+        await feed(app, "что-то в чате")
+        await feed(app, "а это другой чат", chat_id=-2002)
+        await feed(app, "/status", user_id=OWNER, chat_id=OWNER)
+        assert app.session.texts()[-1].count("Память чата «Чат»: 1 сообщений") == 2
+
+
 async def test_foreign_chats_and_other_bots_are_ignored(app: SimpleNamespace) -> None:
     foreign = await feed(app, "ботяра, привет", chat_id=-999)
     assert await app.storage.get_message(-999, foreign) is None
@@ -283,3 +346,51 @@ async def test_edits_update_memory(app: SimpleNamespace) -> None:
 async def test_private_chat_gets_a_hint(app: SimpleNamespace) -> None:
     await feed(app, "привет", chat_id=OWNER, user_id=OWNER)
     assert "/help" in app.session.texts()[-1]
+
+
+async def test_transport_replies_even_if_the_target_is_gone(app: SimpleNamespace) -> None:
+    sent = await app.transport.send(CHAT, "ответ", reply_to=5, notify=True)
+    plain = await app.transport.send(CHAT, "просто так")
+    reply, post = app.session.of(SendMessage)
+    assert (reply.chat_id, reply.text, reply.reply_parameters.message_id) == (CHAT, "ответ", 5)
+    assert reply.reply_parameters.allow_sending_without_reply  # the message may be deleted by now
+    assert post.reply_parameters is None
+    assert sent is not None and plain is not None and sent.message_id < plain.message_id
+    assert abs(sent.created_at - time.time()) < 60
+
+
+async def test_transport_reacts_and_shows_typing(app: SimpleNamespace) -> None:
+    assert await app.transport.react(CHAT, 5, "🔥")
+    [reaction] = app.session.of(SetMessageReaction)
+    assert (reaction.chat_id, reaction.message_id, [r.emoji for r in reaction.reaction]) == (CHAT, 5, ["🔥"])
+
+    async with app.transport.typing(CHAT), asyncio.timeout(2):
+        while not app.session.of(SendChatAction):
+            await asyncio.sleep(0.01)
+    action = app.session.of(SendChatAction)[0]
+    assert (action.chat_id, action.action) == (CHAT, "typing")
+
+
+async def test_telegram_errors_are_reported_not_raised(app: SimpleNamespace) -> None:
+    app.session.rejected = {SendMessage, SetMessageReaction}
+    assert await app.transport.send(CHAT, "привет") is None
+    assert await app.transport.react(CHAT, 5, "🔥") is False  # e.g. the chat restricts reactions
+    assert not await app.responder.send(CHAT, "привет")
+    assert await app.storage.count_messages(CHAT) == 0  # nothing was posted, nothing is remembered
+
+
+def test_telegram_settings_are_the_core_ones_plus_the_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    monkeypatch.setenv("OWNER_IDS", "1,2")
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    with pytest.raises(ValidationError, match="telegram_bot_token"):
+        TelegramSettings(_env_file=None)  # type: ignore[call-arg]
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "42:TEST")
+    settings = TelegramSettings(_env_file=None)  # type: ignore[call-arg]
+    assert settings.telegram_bot_token.get_secret_value() == "42:TEST"
+    assert settings.owner_ids == [1, 2]  # core fields and their parsing come along
+
+
+def test_python_m_backseat_still_starts_the_telegram_bot() -> None:
+    assert legacy_entrypoint.main is telegram_entrypoint.main

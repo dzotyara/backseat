@@ -8,36 +8,38 @@ from aiogram import Bot, Dispatcher
 
 from backseat import __version__
 from backseat.bot_config import BotConfig
-from backseat.config import Settings
 from backseat.context import ContextBuilder
 from backseat.digest import WeeklyDigest
-from backseat.handlers import Services, create_router, register_commands
 from backseat.llm import LLMClient
 from backseat.render import LineFormatter
 from backseat.responder import Responder
 from backseat.storage import Storage
 from backseat.summarizer import Summarizer
+from backseat.telegram.handlers import Services, create_router, register_commands
+from backseat.telegram.settings import TelegramSettings
+from backseat.telegram.transport import TelegramTransport
 from backseat.triggers import BotIdentity
 
 log = logging.getLogger("backseat")
 
 
-async def run(settings: Settings) -> None:
+async def run(settings: TelegramSettings) -> None:
     storage = Storage(settings.db_path)
     await storage.connect()
     bot = Bot(settings.telegram_bot_token.get_secret_value())
+    transport = TelegramTransport(bot)
     llm = LLMClient(settings)
     background: list[asyncio.Task[None]] = []
     responder: Responder | None = None
     try:
         user = await bot.get_me()
-        me = BotIdentity(id=user.id, username=user.username or "")
+        me = BotIdentity(id=user.id, username=user.username or "", platform=transport.platform)
         formatter = LineFormatter(ZoneInfo(settings.timezone), settings.focus_users)
         bot_config = BotConfig(storage, settings)
         context = ContextBuilder(storage, bot_config, settings, me, formatter)
-        summarizer = Summarizer(storage, llm, settings, formatter)
+        summarizer = Summarizer(storage, llm, settings, formatter, platform=me.platform)
         responder = Responder(
-            bot=bot,
+            transport=transport,
             storage=storage,
             llm=llm,
             context=context,

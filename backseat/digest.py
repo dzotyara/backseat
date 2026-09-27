@@ -6,7 +6,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from backseat.config import Settings
+from backseat.config import CoreSettings
 from backseat.context import ContextBuilder
 from backseat.llm import LLMClient, LLMError
 from backseat.replies import clean_reply
@@ -27,7 +27,7 @@ class WeeklyDigest:
         llm: LLMClient,
         context: ContextBuilder,
         responder: Responder,
-        settings: Settings,
+        settings: CoreSettings,
         now: Callable[[], datetime] | None = None,
     ) -> None:
         self._storage = storage
@@ -64,11 +64,18 @@ class WeeklyDigest:
         except Exception:
             log.exception("Weekly digest for %s failed", run_at)
 
+    async def compose(self, chat_id: int, since_ts: int) -> str | None:
+        """The digest post for one chat, or None if the model wrote nothing usable.
+        LLMError propagates: the caller decides whether to retry."""
+        prompt = await self._context.for_digest(chat_id, since_ts)
+        completion = await self._llm.complete(prompt.messages, max_tokens=1500)
+        return clean_reply(completion.text) or None
+
     async def post_all(self, run_at: datetime) -> None:
         settings = self._settings
         since = int((run_at - timedelta(days=7)).timestamp())
         week = f"{run_at:%G-W%V}"
-        for chat_id in await self._storage.active_group_chats(since):
+        for chat_id in await self._storage.active_chats(since):
             if settings.allowed_chat_ids and chat_id not in settings.allowed_chat_ids:
                 continue
             key = f"digest:{chat_id}:{week}"
@@ -77,12 +84,10 @@ class WeeklyDigest:
             if await self._storage.count_messages(chat_id, since) < settings.digest_min_messages:
                 continue
             try:
-                prompt = await self._context.for_digest(chat_id, since)
-                completion = await self._llm.complete(prompt, max_tokens=1500)
+                text = await self.compose(chat_id, since)
             except LLMError as exc:
                 log.warning("chat=%s weekly digest failed: %s", chat_id, exc)
                 continue
-            text = clean_reply(completion.text)
             if text and await self._responder.send(chat_id, text):
                 await self._storage.set_meta(key, "sent")
                 log.info("chat=%s weekly digest posted for %s", chat_id, week)

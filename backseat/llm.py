@@ -9,7 +9,7 @@ from typing import Any
 
 import httpx
 
-from backseat.config import Settings
+from backseat.config import CoreSettings
 
 log = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ class Completion:
 class LLMClient:
     def __init__(
         self,
-        settings: Settings,
+        settings: CoreSettings,
         http: httpx.AsyncClient | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
