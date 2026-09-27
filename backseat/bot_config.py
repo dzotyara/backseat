@@ -23,6 +23,9 @@ NAMES_KEY = "names"
 RUNTIME_KEY = "runtime"  # JSON with only the overridden Runtime fields
 # meta key with what the bot uses when nothing is overridden, for the web panel in another process.
 DEFAULTS_KEY = "defaults"
+# The Runtime fields that default to the same-named .env settings: all but the pause. The bot publishes
+# their defaults for the web panel, and the panel's behaviour form edits them.
+SETTINGS_FIELDS = ("models", "unprompted_cooldown_seconds", "reactions_enabled", "weekly_digest")
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,10 +128,7 @@ class BotConfig:
                 "platform": self.platform,
                 "names": self.default_names(),
                 "persona": self.default_persona(),
-                "models": runtime.models,
-                "unprompted_cooldown_seconds": runtime.unprompted_cooldown_seconds,
-                "reactions_enabled": runtime.reactions_enabled,
-                "weekly_digest": runtime.weekly_digest,
+                **{name: getattr(runtime, name) for name in SETTINGS_FIELDS},
             },
             ensure_ascii=False,
         )
