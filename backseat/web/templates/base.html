@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{% block title %}Панель{% endblock %} · Бэксит</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/static/style.css?v={{ version }}">
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap topbar-row">
+      <a class="brand" href="/" aria-label="Бэксит — обзор"><span class="brand-mark" aria-hidden="true">Б</span><span class="brand-text">Бэксит</span></a>
+      <nav class="topnav" aria-label="Разделы">
+        <a href="/"{% if nav == "home" %} aria-current="page"{% endif %}>Обзор</a>
+        {% for item in slots %}
+        <a href="/bots/{{ item.slug }}/persona"{% if nav == item.slug %} aria-current="page"{% endif %}>{{ item.title }}</a>
+        {% endfor %}
+      </nav>
+    </div>
+  </header>
+  <main class="wrap">
+    {% if flash %}<div class="flash flash-{{ flash.kind }}" role="status">{{ flash.text }}</div>{% endif %}
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="wrap footer">
+    Бэксит v{{ version }} · у панели нет пароля — открывайте её только через SSH-туннель
+  </footer>
+</body>
+</html>

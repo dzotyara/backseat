@@ -1,0 +1,53 @@
+{% extends "bot.html" %}
+{% block title %}{{ chat.name }} · {{ state.slot.title }}{% endblock %}
+{% block page %}
+<p class="back"><a href="/bots/{{ state.slot.slug }}/memory">← Все чаты</a></p>
+
+<section class="card">
+  <div class="card-head"><h2>{{ chat.name }}</h2></div>
+  {% if authors %}<p class="muted">Чаще всех пишут: {{ authors|join(", ") }}</p>{% endif %}
+  <dl class="stats">
+    <div class="stat"><dt>Сообщений в памяти</dt><dd>{{ chat.messages|number }}</dd></div>
+    <div class="stat"><dt>Последнее</dt><dd>{{ chat.last_message_at|when }}</dd></div>
+    <div class="stat"><dt>Сводка обновлена</dt><dd>{{ summary.updated_at|when if summary else "—" }}</dd></div>
+  </dl>
+</section>
+
+<section class="card">
+  <div class="card-head">
+    <h2>Сводка</h2>
+    {% if summary %}<span class="muted">обновлена {{ summary.updated_at|ago }}</span>{% endif %}
+  </div>
+  {% if summary %}
+  <div class="summary">{{ summary.text }}</div>
+  {% else %}
+  <p class="muted">Сводки пока нет: она появится, когда старых сообщений станет больше, чем бот видит дословно.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <div class="card-head">
+    <h2>Последние сообщения</h2>
+    <span class="muted">{{ messages|length }} из {{ chat.messages|number }}, только чтение</span>
+  </div>
+  <ol class="messages">
+    {% set seen = namespace(day="") %}
+    {% for message in messages %}
+    {% set day = message.created_at|day %}
+    {% if day != seen.day %}<li class="day"><span>{{ day }}</span></li>{% set seen.day = day %}{% endif %}
+    <li class="message{% if message.is_bot %} message-bot{% endif %}">
+      <div class="message-head">
+        <span class="author">{{ "Бот" if message.is_bot else message.author }}</span>
+        <span class="muted">{{ message.created_at|clock }}</span>
+      </div>
+      {% if message.reply_to is not none %}
+      {% set target = by_id.get(message.reply_to) %}
+      <div class="reply">↩ {% if target %}{{ "Бот" if target.is_bot else target.author }}: {{ target.text|truncate(90) }}
+        {%- else %}ответ на более раннее сообщение{% endif %}</div>
+      {% endif %}
+      <div class="text">{{ message.text }}</div>
+    </li>
+    {% endfor %}
+  </ol>
+</section>
+{% endblock %}

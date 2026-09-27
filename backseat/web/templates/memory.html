@@ -1,0 +1,26 @@
+{% extends "bot.html" %}
+{% block title %}Память · {{ state.slot.title }}{% endblock %}
+{% block page %}
+<section class="card">
+  <div class="card-head"><h2>Память по чатам</h2></div>
+  {% if not chats %}
+  <p class="muted">Бот пока ничего не запомнил: сообщений в его базе нет.</p>
+  {% else %}
+  <ul class="chat-list">
+    {% for chat in chats %}
+    <li>
+      <a class="chat-row" href="/bots/{{ state.slot.slug }}/memory/{{ chat.chat_id }}">
+        <span class="chat-name">{{ chat.name }}</span>
+        {% if authors[chat.chat_id] %}<span class="muted">{{ authors[chat.chat_id]|join(", ") }}</span>{% endif %}
+        <span class="chat-meta">
+          <span>{{ chat.messages|number }} {{ chat.messages|plural("сообщение", "сообщения", "сообщений") }}</span>
+          <span>последнее {{ chat.last_message_at|when }}</span>
+          <span>{% if chat.summary_updated_at %}сводка от {{ chat.summary_updated_at|when }}{% else %}сводки пока нет{% endif %}</span>
+        </span>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+{% endblock %}

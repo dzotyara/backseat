@@ -12,9 +12,10 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
+from backseat.bot_config import BotConfig, Runtime
 from backseat.config import CoreSettings
 from backseat.context import ContextBuilder
-from backseat.llm import LLMClient, LLMError
+from backseat.llm import Completion, LLMClient, LLMError
 from backseat.prompts import (
     ADDRESSED_TASK,
     FALLBACK_REPLIES,
@@ -47,6 +48,13 @@ class _ChatState:
     last_comment_at: float = float("-inf")
 
 
+def _unprompted_task(reactions_enabled: bool) -> tuple[str, tuple[str, ...]]:
+    """The task for a batch nobody addressed to the bot, and the emojis it offers."""
+    emojis = REACTION_EMOJIS if reactions_enabled else ()
+    react_option = REACT_OPTION.format(emojis=" ".join(emojis)) if emojis else ""
+    return UNPROMPTED_TASK.format(react_option=react_option), emojis
+
+
 class Responder:
     def __init__(
         self,
@@ -59,6 +67,7 @@ class Responder:
         me: BotIdentity,
         after_batch: Callable[[int], Awaitable[None]] | None = None,
         clock: Callable[[], float] = time.monotonic,
+        bot_config: BotConfig | None = None,
     ) -> None:
         self._transport = transport
         self._storage = storage
@@ -68,12 +77,9 @@ class Responder:
         self._me = me
         self._after_batch = after_batch
         self._clock = clock
+        self._bot_config = bot_config  # runtime overrides from the web panel; None = settings only
         self._states: dict[int, _ChatState] = {}
         self._background: set[asyncio.Task[None]] = set()
-        emojis = REACTION_EMOJIS if settings.reactions_enabled else ()
-        self._emojis = emojis
-        react_option = REACT_OPTION.format(emojis=" ".join(emojis)) if emojis else ""
-        self._unprompted_task = UNPROMPTED_TASK.format(react_option=react_option)
 
     def _state(self, chat_id: int) -> _ChatState:
         return self._states.setdefault(chat_id, _ChatState())
@@ -114,10 +120,14 @@ class Responder:
                 return
             batch, state.pending, state.batch_started = state.pending, [], None
             try:
-                if any(item.addressed for item in batch):
-                    await self._answer(chat_id, batch)
+                runtime = await self._runtime()
+                if runtime.paused:
+                    # The messages are stored already: a paused bot still remembers the chat.
+                    log.info("chat=%s paused: %d message(s) left unanswered", chat_id, len(batch))
+                elif any(item.addressed for item in batch):
+                    await self._answer(chat_id, batch, runtime)
                 else:
-                    await self._maybe_comment(chat_id, batch)
+                    await self._maybe_comment(chat_id, batch, runtime)
             except Exception:
                 log.exception("chat=%s failed to process a batch of %d", chat_id, len(batch))
         if self._after_batch:
@@ -131,9 +141,19 @@ class Responder:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
+    async def _runtime(self) -> Runtime:
+        if self._bot_config is None:
+            return Runtime.from_settings(self._settings)
+        return await self._bot_config.runtime()
+
+    async def _complete(self, messages: list[dict[str, str]], runtime: Runtime) -> Completion:
+        if self._bot_config is None:
+            return await self._llm.complete(messages)  # the models the client was built with
+        return await self._llm.complete(messages, models=runtime.models)
+
     # --- addressed: always answer ---
 
-    async def _answer(self, chat_id: int, batch: list[Incoming]) -> None:
+    async def _answer(self, chat_id: int, batch: list[Incoming], runtime: Runtime) -> None:
         messages = await self._storage.get_messages(chat_id, [item.message_id for item in batch])
         by_id = {message.message_id: message for message in messages}
         # One answer per person who called the bot, to their latest such message.
@@ -154,7 +174,7 @@ class Responder:
             text = ""
             async with self._transport.typing(chat_id):
                 try:
-                    completion = await self._llm.complete(prompt.messages)
+                    completion = await self._complete(prompt.messages, runtime)
                     text = clean_reply(completion.text)
                 except LLMError as exc:
                     log.error("chat=%s every model failed for an addressed message: %s", chat_id, exc)
@@ -165,25 +185,26 @@ class Responder:
 
     # --- not addressed: maybe comment or react ---
 
-    async def _maybe_comment(self, chat_id: int, batch: list[Incoming]) -> None:
+    async def _maybe_comment(self, chat_id: int, batch: list[Incoming], runtime: Runtime) -> None:
         state = self._state(chat_id)
         if all(item.trivial for item in batch):
             log.info("chat=%s skip: trivial batch of %d", chat_id, len(batch))
             return
-        if self._clock() - state.last_comment_at < self._settings.unprompted_cooldown_seconds:
+        if self._clock() - state.last_comment_at < runtime.unprompted_cooldown_seconds:
             log.info("chat=%s skip: cooldown", chat_id)
             return
         messages = await self._storage.get_messages(chat_id, [item.message_id for item in batch])
         if not any(not message.is_bot for message in messages):
             return
-        prompt = await self._context.for_reply(chat_id, messages, lambda ids: self._unprompted_task)
+        task, emojis = _unprompted_task(runtime.reactions_enabled)
+        prompt = await self._context.for_reply(chat_id, messages, lambda ids: task)
         try:
-            completion = await self._llm.complete(prompt.messages)
+            completion = await self._complete(prompt.messages, runtime)
         except LLMError as exc:
             log.warning("chat=%s unprompted comment skipped, every model failed: %s", chat_id, exc)
             return
         numbers = [prompt.ids.short(message.message_id) for message in messages if not message.is_bot]
-        action = parse_action(completion.text, [n for n in numbers if n is not None], self._emojis)
+        action = parse_action(completion.text, [n for n in numbers if n is not None], emojis)
         target = prompt.ids.real(action.message_id)
         if action.kind == "reply" and target is not None:
             await self.send(chat_id, action.text, reply_to=target)

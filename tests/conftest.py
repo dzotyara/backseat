@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from backseat.config import Settings
+from backseat.config import CoreSettings as Settings
 from backseat.llm import Completion, LLMError
 from backseat.render import LineFormatter
 from backseat.storage import Storage, StoredMessage

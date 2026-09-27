@@ -9,7 +9,7 @@ from typing import Any
 
 import httpx
 
-from backseat.config import Settings
+from backseat.config import CoreSettings
 
 log = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ class Completion:
 class LLMClient:
     def __init__(
         self,
-        settings: Settings,
+        settings: CoreSettings,
         http: httpx.AsyncClient | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -66,10 +66,13 @@ class LLMClient:
         *,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        models: list[str] | None = None,
     ) -> Completion:
+        """Walk `models` (by default the configured ones) in order until one answers."""
+        models = self.models if models is None else models
         now = self._clock()
         # If every model is cooling down, try them all anyway rather than go silent.
-        candidates = [m for m in self.models if self._skip_until.get(m, 0.0) <= now] or self.models
+        candidates = [m for m in models if self._skip_until.get(m, 0.0) <= now] or models
         failures = []
         for model in candidates:
             try:

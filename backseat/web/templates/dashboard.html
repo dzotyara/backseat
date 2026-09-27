@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Обзор{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Обзор</h1>
+  <p class="muted">Выключатель ставит бота на паузу: он продолжает читать и запоминать чат, но ничего не пишет —
+    ни ответов, ни реакций, ни итогов недели.</p>
+</div>
+
+<div class="grid">
+{% for card in cards %}
+  <section class="card bot-card" aria-labelledby="bot-{{ card.slot.slug }}">
+    <div class="card-head">
+      <h2 id="bot-{{ card.slot.slug }}">{{ card.slot.title }}</h2>
+      {% if card.state %}{{ ui.pause_switch(card.slot, card.state.runtime.paused, "/") }}{% endif %}
+    </div>
+    {% if card.error %}
+      <p class="note note-error">{{ card.error }}</p>
+    {% elif not card.state %}
+      <div class="chips"><span class="chip chip-muted"><span class="dot"></span>не настроен</span></div>
+      <p class="muted">Бот ещё не запускался: файла базы <code>{{ card.slot.db_path }}</code> нет.
+        Он появится после первого запуска бота.</p>
+    {% else %}
+      {% set state = card.state %}
+      <div class="chips">{{ ui.heartbeat(state.heartbeat) }} {{ ui.mode(state.runtime.paused) }}</div>
+      {{ ui.warnings(state) }}
+      <dl class="facts">
+        <div><dt>Имена</dt><dd>{{ card.names|join(", ") }}</dd></div>
+        <div><dt>Модели</dt><dd><ol class="model-list">
+          {%- for model in state.runtime.models %}<li>{{ model }}</li>{% endfor -%}
+        </ol></dd></div>
+        <div><dt>Характер</dt><dd>{{ "свой" if card.custom_persona else "по умолчанию" }}</dd></div>
+        <div><dt>Память</dt><dd>
+          {%- if card.chats -%}
+          {{ card.total_messages|number }} {{ card.total_messages|plural("сообщение", "сообщения", "сообщений") }}
+          в {{ card.chats|length }} {{ card.chats|length|plural("чате", "чатах", "чатах") }},
+          последнее {{ card.last_message_at|ago }}
+          {%- else -%}
+          пока пусто
+          {%- endif -%}
+        </dd></div>
+      </dl>
+      {% if card.chats %}
+      <ul class="mini-chats">
+        {% for chat in card.chats[:3] %}
+        <li>
+          <a href="/bots/{{ card.slot.slug }}/memory/{{ chat.chat_id }}">{{ chat.name }}</a>
+          <span class="muted">{{ chat.messages|number }} · {{ chat.last_message_at|ago }}
+            {%- if chat.summary_updated_at %} · сводка {{ chat.summary_updated_at|ago }}{% endif %}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+      <nav class="card-links" aria-label="{{ card.slot.title }}">
+        <a href="/bots/{{ card.slot.slug }}/persona">Характер</a>
+        <a href="/bots/{{ card.slot.slug }}/settings">Поведение</a>
+        <a href="/bots/{{ card.slot.slug }}/memory">Память</a>
+      </nav>
+    {% endif %}
+  </section>
+{% endfor %}
+
+  <section class="card" aria-labelledby="spending">
+    <div class="card-head"><h2 id="spending">Расходы OpenRouter</h2></div>
+    {% if spending.problem %}
+      <p class="muted">{{ spending.problem }}</p>
+    {% else %}
+      <dl class="stats">
+        {% if spending.free_limit is not none %}
+        {% set used = spending.free_used or 0 %}
+        <div class="stat stat-wide">
+          <dt>Бесплатные запросы сегодня</dt>
+          <dd>{{ used }} из {{ spending.free_limit }}</dd>
+          <meter min="0" max="{{ spending.free_limit }}" value="{{ used }}" low="{{ spending.free_limit * 0.7 }}"
+                 high="{{ spending.free_limit * 0.9 }}" optimum="0">{{ used }} из {{ spending.free_limit }}</meter>
+        </div>
+        {% endif %}
+        <div class="stat">
+          <dt>Потрачено сегодня</dt>
+          <dd>{{ spending.usage_daily|money if spending.usage_daily is not none else "—" }}</dd>
+        </div>
+        <div class="stat">
+          <dt>За месяц</dt>
+          <dd>{{ spending.usage_monthly|money if spending.usage_monthly is not none else "—" }}</dd>
+        </div>
+      </dl>
+      <p class="hint">По ключу OPENROUTER_API_KEY — сумма по всем ботам, которые им пользуются. Обновляется раз в минуту.</p>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}
