@@ -1,0 +1,28 @@
+{% extends "bot.html" %}
+{% block title %}Характер · {{ state.slot.title }}{% endblock %}
+{% block page %}
+<section class="card">
+  <div class="card-head">
+    <h2>Характер</h2>
+    <span class="chip {{ 'chip-accent' if custom else 'chip-muted' }}">{{ "свой" if custom else "по умолчанию" }}</span>
+  </div>
+  <p class="hint">Кто бот такой и как себя ведёт: этот текст идёт в каждый запрос к модели и действует со следующего
+    ответа. В нём написано, над кем бот подшучивает, так что в чат его не выкладывайте.</p>
+  {% if not text and not custom %}
+  <p class="note note-warn">Стандартный характер появится здесь, когда бот запустится и сообщит его панели.
+    Свой можно написать уже сейчас.</p>
+  {% endif %}
+  <form method="post" action="/bots/{{ state.slot.slug }}/persona" class="stack">
+    <label class="visually-hidden" for="persona">Текст характера</label>
+    <textarea id="persona" name="persona" class="mono persona" rows="24" spellcheck="false"
+      {%- if error %} aria-invalid="true" aria-describedby="persona-error"{% endif %}>{{ text }}</textarea>
+    {% if error %}<p class="field-error" id="persona-error">{{ error }}</p>{% endif %}
+    <div class="actions">
+      <span class="muted">{{ text|length|number }} {{ text|length|plural("символ", "символа", "символов") }}</span>
+      <span class="spacer"></span>
+      {% if custom %}<a class="btn btn-quiet" href="/bots/{{ state.slot.slug }}/persona/reset">Сбросить к стандартному…</a>{% endif %}
+      <button type="submit" class="btn btn-primary">Сохранить</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

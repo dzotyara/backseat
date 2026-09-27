@@ -1,0 +1,50 @@
+{% macro heartbeat(beat) -%}
+{% if beat.status == "online" -%}
+<span class="chip chip-ok" title="Последний сигнал {{ beat.at|when }}"><span class="dot"></span>онлайн</span>
+{%- elif beat.status == "stale" -%}
+<span class="chip chip-warn" title="Последний сигнал {{ beat.at|when }}"><span class="dot"></span>не отвечает · {{ beat.at|ago }}</span>
+{%- else -%}
+<span class="chip chip-muted" title="Бот ещё не присылал сигналов, что он жив"><span class="dot"></span>нет данных</span>
+{%- endif %}
+{%- endmacro %}
+
+{% macro mode(paused) -%}
+{% if paused -%}
+<span class="chip chip-warn">на паузе</span>
+{%- else -%}
+<span class="chip chip-accent">пишет в чат</span>
+{%- endif %}
+{%- endmacro %}
+
+{% macro pause_switch(slot, paused, next) -%}
+<form method="post" action="/bots/{{ slot.slug }}/pause" class="switch-form">
+  <input type="hidden" name="paused" value="{{ '0' if paused else '1' }}">
+  <input type="hidden" name="next" value="{{ next }}">
+  <button type="submit" class="switch" role="switch" aria-checked="{{ 'false' if paused else 'true' }}"
+          aria-label="{{ slot.title }}: бот пишет в чат"
+          title="{{ 'Включить: бот снова будет отвечать и комментировать' if paused else 'Пауза: бот читает и запоминает чат, но ничего не пишет' }}">
+    <span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span>
+    <span class="switch-text" aria-hidden="true">{{ 'Пауза' if paused else 'Включён' }}</span>
+  </button>
+</form>
+{%- endmacro %}
+
+{% macro warnings(state) -%}
+{% if state.foreign_platform %}
+<p class="note note-error">В этой базе записан бот {{ state.foreign_platform }}, а панель открыла её как {{ state.slot.title }}.
+  Проверьте TELEGRAM_DB_PATH и DISCORD_DB_PATH.</p>
+{% endif %}
+{% if not state.defaults_known %}
+<p class="note note-warn">Бот ещё не сообщил свои настройки по умолчанию — он делает это при запуске.
+  Пока показаны значения из кода; в .env бота они могут быть другими.</p>
+{% endif %}
+{%- endmacro %}
+
+{% macro override(name, overridden) -%}
+{% if name in overridden -%}
+<span class="field-state"><span class="chip chip-accent">изменено</span>
+  <button type="submit" form="reset" name="field" value="{{ name }}" class="link-button">вернуть по умолчанию</button></span>
+{%- else -%}
+<span class="field-state"><span class="chip chip-muted">по умолчанию</span></span>
+{%- endif %}
+{%- endmacro %}
