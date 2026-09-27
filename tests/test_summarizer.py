@@ -1,6 +1,7 @@
 import re
 from pathlib import Path
 
+from backseat.bot_config import BotConfig
 from backseat.llm import LLMError
 from backseat.render import LineFormatter
 from backseat.storage import Storage
@@ -73,3 +74,13 @@ async def test_maintain_swallows_model_failures(tmp_path: Path, storage: Storage
     summarizer = Summarizer(storage, FakeLLM(LLMError("down")), settings, formatter)  # type: ignore[arg-type]
     await summarizer.maintain(CHAT)
     assert await storage.get_summary(CHAT) is None
+
+
+async def test_the_panel_picks_the_summary_models(tmp_path: Path, storage: Storage, formatter: LineFormatter) -> None:
+    settings = make_settings(tmp_path, recent_context_tokens=100, summary_chunk_tokens=100)
+    await fill(storage, 40)
+    bot_config = BotConfig(storage, settings)
+    await bot_config.set_runtime(models=["panel/model"])
+    llm = FakeLLM("Сводка")
+    assert await Summarizer(storage, llm, settings, formatter, bot_config=bot_config).update_once(CHAT)  # type: ignore[arg-type]
+    assert llm.options[0]["models"] == ["panel/model"]

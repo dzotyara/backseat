@@ -4,6 +4,7 @@ import asyncio
 import logging
 import time
 
+from backseat.bot_config import BotConfig
 from backseat.config import CoreSettings
 from backseat.llm import LLMClient, LLMError
 from backseat.prompts import PARTICIPANT_LINE, SUMMARY_FOCUS_HINT, SUMMARY_SYSTEM
@@ -25,12 +26,14 @@ class Summarizer:
         formatter: LineFormatter,
         *,
         platform: str = "Telegram",  # the summary prompt names it, like BotIdentity.platform
+        bot_config: BotConfig | None = None,  # the panel's model order; None = settings only
     ) -> None:
         self._storage = storage
         self._llm = llm
         self._settings = settings
         self._formatter = formatter
         self._platform = platform
+        self._bot_config = bot_config
         self._locks: dict[int, asyncio.Lock] = {}
 
     async def maintain(self, chat_id: int) -> None:
@@ -80,10 +83,12 @@ class Summarizer:
         # The chunk is numbered on its own: replies to messages outside it show a bare "↩".
         lines = self._formatter.lines(chunk, IdMap(message.message_id for message in chunk))
         user = f"ТЕКУЩАЯ СВОДКА:\n{previous}\n\nСЛЕДУЮЩИЙ КУСОК ПЕРЕПИСКИ:\n{lines}"
+        panel = {"models": (await self._bot_config.runtime()).models} if self._bot_config else {}
         completion = await self._llm.complete(
             [{"role": "system", "content": system}, {"role": "user", "content": user}],
             max_tokens=_SUMMARY_MAX_TOKENS,
             temperature=0.2,
+            **panel,
         )
         await self._storage.set_summary(chat_id, completion.text.strip(), chunk[-1].message_id, int(time.time()))
         log.info("chat=%s summary now covers up to message %s (%d folded)", chat_id, chunk[-1].message_id, len(chunk))

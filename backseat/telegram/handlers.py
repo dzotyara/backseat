@@ -162,7 +162,10 @@ def create_router(svc: Services) -> Router:
     async def cmd_status(message: Message, bot: Bot) -> None:
         if not is_owner(message):
             return  # for everyone else the command does not exist
-        lines = [f"Бэксит v{__version__}", "Модели по порядку: " + " → ".join(svc.llm.models)]
+        runtime = await svc.bot_config.runtime()  # .env values with the web panel's overrides
+        lines = [f"Бэксит v{__version__}", "Модели по порядку: " + " → ".join(runtime.models)]
+        if runtime.paused:
+            lines.append("⏸ На паузе: читаю и запоминаю, но молчу (включается в веб-панели)")
         if svc.llm.last_model:
             lines.append(f"Последний ответ дала: {svc.llm.last_model}")
         if message.chat.type == ChatType.PRIVATE:

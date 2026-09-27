@@ -6,6 +6,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from backseat.bot_config import BotConfig
 from backseat.config import CoreSettings
 from backseat.context import ContextBuilder
 from backseat.llm import LLMClient, LLMError
@@ -28,6 +29,7 @@ class WeeklyDigest:
         context: ContextBuilder,
         responder: Responder,
         settings: CoreSettings,
+        bot_config: BotConfig | None = None,  # the panel's switches; None = settings only
         now: Callable[[], datetime] | None = None,
     ) -> None:
         self._storage = storage
@@ -35,6 +37,7 @@ class WeeklyDigest:
         self._context = context
         self._responder = responder
         self._settings = settings
+        self._bot_config = bot_config
         self._tz = ZoneInfo(settings.timezone)
         self._now = now or (lambda: datetime.now(self._tz))
 
@@ -68,11 +71,20 @@ class WeeklyDigest:
         """The digest post for one chat, or None if the model wrote nothing usable.
         LLMError propagates: the caller decides whether to retry."""
         prompt = await self._context.for_digest(chat_id, since_ts)
-        completion = await self._llm.complete(prompt.messages, max_tokens=1500)
+        panel = {"models": (await self._bot_config.runtime()).models} if self._bot_config else {}
+        completion = await self._llm.complete(prompt.messages, max_tokens=1500, **panel)
         return clean_reply(completion.text) or None
 
     async def post_all(self, run_at: datetime) -> None:
         settings = self._settings
+        if self._bot_config is None:
+            enabled = settings.weekly_digest
+        else:
+            # Checked at posting time: the web panel may pause the bot or switch digests off any moment.
+            runtime = await self._bot_config.runtime()
+            enabled = runtime.weekly_digest and not runtime.paused
+        if not enabled:
+            return
         since = int((run_at - timedelta(days=7)).timestamp())
         week = f"{run_at:%G-W%V}"
         for chat_id in await self._storage.active_chats(since):

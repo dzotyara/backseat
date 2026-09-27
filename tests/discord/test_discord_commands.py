@@ -255,3 +255,22 @@ async def test_commands_are_guild_only_and_owner_ones_hidden(svc: Services) -> N
     assert [option["name"] for option in payloads["prompt"]["options"]] == ["text", "file", "reset"]
     assert [option["type"] for option in payloads["prompt"]["options"]] == [3, 11, 5]  # string, attachment, bool
     assert [option["required"] for option in payloads["names"]["options"]] == [False]
+
+
+async def test_digest_waits_while_the_bot_is_paused(svc: Services) -> None:
+    await svc.bot_config.set_runtime(paused=True)
+    interaction = FakeInteraction(PETYA)
+    await cmd_digest(svc, interaction)  # type: ignore[arg-type]
+    reply = only_reply(interaction)
+    assert reply.content == "Я сейчас на паузе: итоги подведу, когда меня включат."
+    assert reply.ephemeral
+    assert svc.digest.calls == []  # type: ignore[attr-defined]
+
+
+async def test_status_shows_the_panel_models_and_pause(svc: Services) -> None:
+    await svc.bot_config.set_runtime(paused=True, models=["panel/model"])
+    interaction = FakeInteraction(OWNER)
+    await cmd_status(svc, interaction)  # type: ignore[arg-type]
+    [status] = interaction.followup.sent
+    assert "Модели по порядку: panel/model" in status.content
+    assert "На паузе" in status.content

@@ -19,7 +19,13 @@ SUNDAY_EVENING = datetime(2026, 9, 27, 20, 0, tzinfo=MSK)
 WEEK_AGO = int((SUNDAY_EVENING - timedelta(days=7)).timestamp())
 
 
-def make_digest(settings: CoreSettings, storage: Storage, llm: FakeLLM, transport: FakeTransport) -> WeeklyDigest:
+def make_digest(
+    settings: CoreSettings,
+    storage: Storage,
+    llm: FakeLLM,
+    transport: FakeTransport,
+    bot_config: BotConfig | None = None,
+) -> WeeklyDigest:
     formatter = LineFormatter(MSK, settings.focus_users)
     context = ContextBuilder(storage, BotConfig(storage, settings), settings, BOT, formatter)
     responder = Responder(
@@ -30,7 +36,14 @@ def make_digest(settings: CoreSettings, storage: Storage, llm: FakeLLM, transpor
         settings=settings,
         me=BOT,
     )
-    return WeeklyDigest(storage=storage, llm=llm, context=context, responder=responder, settings=settings)  # type: ignore[arg-type]
+    return WeeklyDigest(
+        storage=storage,
+        llm=llm,  # type: ignore[arg-type]
+        context=context,
+        responder=responder,
+        settings=settings,
+        bot_config=bot_config,
+    )
 
 
 async def fill_week(storage: Storage, count: int, chat_id: int = CHAT) -> None:
@@ -50,7 +63,7 @@ def test_next_run_is_sunday_evening(settings: CoreSettings) -> None:
 
 
 async def test_digest_is_posted_once_per_week(tmp_path: Path, storage: Storage) -> None:
-    settings = make_settings(tmp_path, digest_min_messages=3)
+    settings = make_settings(tmp_path, weekly_digest=True, digest_min_messages=3)
     await fill_week(storage, 5)
     llm, transport = FakeLLM("Итоги недели\n— Иван снова не побежал"), FakeTransport()
     digest = make_digest(settings, storage, llm, transport)
@@ -65,7 +78,7 @@ async def test_digest_is_posted_once_per_week(tmp_path: Path, storage: Storage) 
 
 async def test_every_active_chat_gets_its_digest_whatever_its_id(tmp_path: Path, storage: Storage) -> None:
     # Telegram group ids are negative, Discord channel ids positive: each bot keeps its own database.
-    settings = make_settings(tmp_path, digest_min_messages=3)
+    settings = make_settings(tmp_path, weekly_digest=True, digest_min_messages=3)
     channel = 1_300_000_000_000_000_000
     await fill_week(storage, 5)
     await fill_week(storage, 5, chat_id=channel)
@@ -76,7 +89,7 @@ async def test_every_active_chat_gets_its_digest_whatever_its_id(tmp_path: Path,
 
 
 async def test_quiet_and_foreign_chats_get_no_digest(tmp_path: Path, storage: Storage) -> None:
-    settings = make_settings(tmp_path, digest_min_messages=3, allowed_chat_ids=[CHAT])
+    settings = make_settings(tmp_path, weekly_digest=True, digest_min_messages=3, allowed_chat_ids=[CHAT])
     await fill_week(storage, 2)
     await fill_week(storage, 10, chat_id=-2002)
     llm = FakeLLM()
@@ -85,7 +98,7 @@ async def test_quiet_and_foreign_chats_get_no_digest(tmp_path: Path, storage: St
 
 
 async def test_failed_digest_is_retried(tmp_path: Path, storage: Storage) -> None:
-    settings = make_settings(tmp_path, digest_min_messages=3)
+    settings = make_settings(tmp_path, weekly_digest=True, digest_min_messages=3)
     await fill_week(storage, 5)
     llm, transport = FakeLLM(LLMError("down"), "Итоги недели\n— всё тихо"), FakeTransport()
     digest = make_digest(settings, storage, llm, transport)
@@ -96,7 +109,7 @@ async def test_failed_digest_is_retried(tmp_path: Path, storage: Storage) -> Non
 
 
 async def test_compose_cleans_the_post_and_lets_model_failures_through(tmp_path: Path, storage: Storage) -> None:
-    settings = make_settings(tmp_path)
+    settings = make_settings(tmp_path, weekly_digest=True)
     await fill_week(storage, 5)
     llm = FakeLLM("```\nИтоги недели\n— шашлыки\n```", "```\n```", LLMError("down"))
     digest = make_digest(settings, storage, llm, FakeTransport())
@@ -106,3 +119,32 @@ async def test_compose_cleans_the_post_and_lets_model_failures_through(tmp_path:
     assert await digest.compose(CHAT, WEEK_AGO) is None  # nothing left to post
     with pytest.raises(LLMError):
         await digest.compose(CHAT, WEEK_AGO)
+
+
+async def test_the_panel_can_pause_or_switch_off_the_digest_and_pick_its_models(
+    tmp_path: Path, storage: Storage
+) -> None:
+    settings = make_settings(tmp_path, weekly_digest=True, digest_min_messages=3)
+    await fill_week(storage, 5)
+    bot_config = BotConfig(storage, settings)
+    llm, transport = FakeLLM("Итоги недели\n— тишина"), FakeTransport()
+    digest = make_digest(settings, storage, llm, transport, bot_config=bot_config)
+
+    await bot_config.set_runtime(paused=True)
+    await digest.post_all(SUNDAY_EVENING)
+    await bot_config.set_runtime(paused=False, weekly_digest=False)
+    await digest.post_all(SUNDAY_EVENING)
+    assert llm.calls == []
+
+    await bot_config.set_runtime(weekly_digest=True, models=["panel/model"])
+    await digest.post_all(SUNDAY_EVENING)
+    assert len(transport.sent) == 1
+    assert llm.options[-1]["models"] == ["panel/model"]
+
+
+async def test_without_the_panel_the_env_switch_decides(tmp_path: Path, storage: Storage) -> None:
+    settings = make_settings(tmp_path, weekly_digest=False, digest_min_messages=3)
+    await fill_week(storage, 5)
+    llm = FakeLLM("Итоги недели")
+    await make_digest(settings, storage, llm, FakeTransport()).post_all(SUNDAY_EVENING)
+    assert llm.calls == []

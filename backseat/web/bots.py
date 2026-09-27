@@ -11,13 +11,12 @@ from pathlib import Path
 
 from backseat.bot_config import DEFAULTS_KEY, BotConfig, Runtime, check_runtime_value
 from backseat.config import CoreSettings
+from backseat.heartbeat import CHAT_TITLE_PREFIX, HEARTBEAT_KEY
 from backseat.storage import Storage, StoredMessage
 
 log = logging.getLogger(__name__)
 
-HEARTBEAT_KEY = "heartbeat"  # meta: unix seconds, refreshed by a running bot every minute
 HEARTBEAT_FRESH_SECONDS = 180
-CHAT_TITLE_PREFIX = "chat_title:"  # optional meta "chat_title:<chat_id>" -> the chat's name
 # Runtime fields among the published defaults (BotConfig.publish_defaults).
 _PUBLISHED_RUNTIME = ("models", "unprompted_cooldown_seconds", "reactions_enabled", "weekly_digest")
 

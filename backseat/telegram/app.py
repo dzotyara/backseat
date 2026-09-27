@@ -5,11 +5,13 @@ import logging
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher
+from aiogram.exceptions import TelegramAPIError
 
 from backseat import __version__
 from backseat.bot_config import BotConfig
 from backseat.context import ContextBuilder
 from backseat.digest import WeeklyDigest
+from backseat.heartbeat import beat, remember_chat_title, run_heartbeat
 from backseat.llm import LLMClient
 from backseat.render import LineFormatter
 from backseat.responder import Responder
@@ -21,6 +23,18 @@ from backseat.telegram.transport import TelegramTransport
 from backseat.triggers import BotIdentity
 
 log = logging.getLogger("backseat")
+
+
+async def remember_chat_titles(bot: Bot, storage: Storage, chat_ids: list[int]) -> None:
+    """Group names for the web panel, which otherwise knows the chats only by id."""
+    for chat_id in chat_ids:
+        try:
+            chat = await bot.get_chat(chat_id)
+        except TelegramAPIError as exc:
+            log.warning("chat=%s title unavailable: %s", chat_id, exc)
+            continue
+        if chat.title:
+            await remember_chat_title(storage, chat_id, chat.title)
 
 
 async def run(settings: TelegramSettings) -> None:
@@ -35,9 +49,9 @@ async def run(settings: TelegramSettings) -> None:
         user = await bot.get_me()
         me = BotIdentity(id=user.id, username=user.username or "", platform=transport.platform)
         formatter = LineFormatter(ZoneInfo(settings.timezone), settings.focus_users)
-        bot_config = BotConfig(storage, settings)
+        bot_config = BotConfig(storage, settings, platform=me.platform)
         context = ContextBuilder(storage, bot_config, settings, me, formatter)
-        summarizer = Summarizer(storage, llm, settings, formatter, platform=me.platform)
+        summarizer = Summarizer(storage, llm, settings, formatter, platform=me.platform, bot_config=bot_config)
         responder = Responder(
             transport=transport,
             storage=storage,
@@ -46,14 +60,20 @@ async def run(settings: TelegramSettings) -> None:
             settings=settings,
             me=me,
             after_batch=summarizer.maintain,
+            bot_config=bot_config,
         )
 
         dispatcher = Dispatcher()
         dispatcher.include_router(create_router(Services(settings, storage, bot_config, llm, responder, me)))
         await register_commands(bot, settings.owner_ids)
-        if settings.weekly_digest:
-            digest = WeeklyDigest(storage=storage, llm=llm, context=context, responder=responder, settings=settings)
-            background.append(asyncio.create_task(digest.run_forever(), name="weekly-digest"))
+        await beat(storage, bot_config)  # the panel sees the bot and its defaults right away
+        await remember_chat_titles(bot, storage, settings.allowed_chat_ids)
+        # Always scheduled: the web panel's switch is checked at posting time.
+        digest = WeeklyDigest(
+            storage=storage, llm=llm, context=context, responder=responder, settings=settings, bot_config=bot_config
+        )
+        background.append(asyncio.create_task(digest.run_forever(), name="weekly-digest"))
+        background.append(asyncio.create_task(run_heartbeat(storage, bot_config), name="heartbeat"))
 
         log.info("Backseat v%s started as @%s; models: %s", __version__, me.username, ", ".join(settings.models))
         await dispatcher.start_polling(bot, allowed_updates=["message", "edited_message"])

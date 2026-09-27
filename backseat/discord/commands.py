@@ -123,7 +123,10 @@ async def cmd_status(svc: Services, interaction: discord.Interaction) -> None:
     # Discord waits only 3 seconds for an answer, OpenRouter may take longer.
     await interaction.response.defer(ephemeral=True, thinking=True)
     tz = ZoneInfo(svc.settings.timezone)
-    lines = [f"Бэксит v{__version__}", "Модели по порядку: " + " → ".join(svc.llm.models)]
+    runtime = await svc.bot_config.runtime()  # .env values with the web panel's overrides
+    lines = [f"{svc.me.username} v{__version__}", "Модели по порядку: " + " → ".join(runtime.models)]
+    if runtime.paused:
+        lines.append("⏸ На паузе: читаю и запоминаю, но молчу (включается в веб-панели)")
     if svc.llm.last_model:
         lines.append(f"Последний ответ дала: {svc.llm.last_model}")
     for chat_id in svc.settings.allowed_chat_ids or [interaction.channel_id]:
@@ -216,6 +219,9 @@ async def cmd_digest(svc: Services, interaction: discord.Interaction) -> None:
         await _private(interaction, "Здесь я итоги не подвожу.")
         return
     chat_id = channel.id
+    if (await svc.bot_config.runtime()).paused:
+        await _private(interaction, "Я сейчас на паузе: итоги подведу, когда меня включат.")
+        return
     now = svc.clock()
     wait = svc.last_digest.get(chat_id, -math.inf) + svc.settings.digest_cooldown_seconds - now
     if wait > 0:

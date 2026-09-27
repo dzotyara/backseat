@@ -27,6 +27,7 @@ from backseat.discord.messages import (
 )
 from backseat.discord.settings import DiscordSettings
 from backseat.discord.transport import DiscordTransport
+from backseat.heartbeat import beat, remember_chat_title, run_heartbeat
 from backseat.llm import LLMClient
 from backseat.render import LineFormatter
 from backseat.responder import Incoming, Responder
@@ -48,9 +49,11 @@ class BackseatClient(discord.Client):
         self.llm = llm
         self.tree = app_commands.CommandTree(self)
         self.transport = DiscordTransport(self)
-        self.bot_config = BotConfig(storage, settings)
+        self.bot_config = BotConfig(storage, settings, platform=self.transport.platform)
         self.formatter = LineFormatter(ZoneInfo(settings.timezone), settings.focus_users)
-        self.summarizer = Summarizer(storage, llm, settings, self.formatter, platform=self.transport.platform)
+        self.summarizer = Summarizer(
+            storage, llm, settings, self.formatter, platform=self.transport.platform, bot_config=self.bot_config
+        )
         self.services: Services | None = None  # set in setup_hook, once the bot knows who it is
         self._background: set[asyncio.Task[None]] = set()
         self._catching_up: set[int] = set()  # channels the catch-up is loading and folding right now
@@ -70,10 +73,17 @@ class BackseatClient(discord.Client):
             settings=self.settings,
             me=me,
             after_batch=self.after_batch,
+            bot_config=self.bot_config,
         )
-        # Built even with WEEKLY_DIGEST=false: /digest writes its posts.
+        # Always built and scheduled: /digest writes its posts, and the weekly switch lives in the web
+        # panel, checked at posting time.
         digest = WeeklyDigest(
-            storage=self.storage, llm=self.llm, context=context, responder=responder, settings=self.settings
+            storage=self.storage,
+            llm=self.llm,
+            context=context,
+            responder=responder,
+            settings=self.settings,
+            bot_config=self.bot_config,
         )
         owners = frozenset(self.settings.owner_ids) | application_owners(
             self.application or await self.application_info()
@@ -98,9 +108,10 @@ class BackseatClient(discord.Client):
             svc.me.username,
             ", ".join(self.settings.models),
         )
+        await beat(self.storage, self.bot_config)  # the panel sees the bot and its defaults right away
+        self._spawn(run_heartbeat(self.storage, self.bot_config), "heartbeat")
         self._spawn(self.catch_up(svc.me.id), "catch-up")
-        if self.settings.weekly_digest:
-            self._spawn(svc.digest.run_forever(), "weekly-digest")
+        self._spawn(svc.digest.run_forever(), "weekly-digest")
 
     async def catch_up(self, me_id: int) -> None:
         """Read each allowed channel's recent history once, then fold whatever is not summarized yet."""
@@ -109,6 +120,8 @@ class BackseatClient(discord.Client):
             try:
                 channel = await self.transport.channel(chat_id)
                 if channel is not None:
+                    if name := getattr(channel, "name", None):  # for the web panel, which only knows ids
+                        await remember_chat_title(self.storage, chat_id, f"#{name}")
                     await backfill(channel, self.storage, me_id, self.settings.backfill_days)
                     await fold_history(self.summarizer, chat_id)
             except Exception:
