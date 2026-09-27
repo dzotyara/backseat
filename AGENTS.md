@@ -27,7 +27,10 @@ pydantic-settings. User-facing docs are in README.md (Russian).
   (`CoreSettings`), `commands.py` (what both bots' commands share: `/status`, reset words, a persona
   sent as a file), `logs.py` (the log format of every entry point).
 - Adapters: `backseat/telegram/` and `backseat/discord/` — settings with the token, a `Transport`,
-  message parsing, commands, the app wiring. `backseat/web/` — the panel.
+  message parsing, commands, the app wiring. `backseat/web/` — the panel: `app.py` wires it,
+  `security.py` (Host, CSRF and framing guard), `pages.py` (what every page shares: `Panel`, flash
+  messages, error pages), `routes/` (one module per section), `bots.py` (a bot's database as the panel
+  sees it), `forms.py`.
 - Each bot has its own SQLite file (`data/backseat.db`, `data/discord.db`); the panel opens both.
 
 ## How a message flows

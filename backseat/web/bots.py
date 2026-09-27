@@ -3,22 +3,19 @@ processes at the same time, so every request opens a file, runs a few short stat
 
 import json
 import logging
-import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from backseat.bot_config import DEFAULTS_KEY, BotConfig, Runtime, check_runtime_value
+from backseat.bot_config import DEFAULTS_KEY, SETTINGS_FIELDS, BotConfig, Runtime, check_runtime_value
 from backseat.config import CoreSettings
 from backseat.heartbeat import CHAT_TITLE_PREFIX, HEARTBEAT_KEY
-from backseat.storage import Storage, StoredMessage
+from backseat.storage import Storage
 
 log = logging.getLogger(__name__)
 
 HEARTBEAT_FRESH_SECONDS = 180
-# Runtime fields among the published defaults (BotConfig.publish_defaults).
-_PUBLISHED_RUNTIME = ("models", "unprompted_cooldown_seconds", "reactions_enabled", "weekly_digest")
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,7 +53,7 @@ def _parse_defaults(raw: str | None) -> tuple[str, CoreSettings, str] | None:
         # The bot's settings as far as BotConfig needs them. model_construct: no .env of its own here.
         settings = CoreSettings.model_construct(
             bot_names=names,
-            **{name: check_runtime_value(name, data[name]) for name in _PUBLISHED_RUNTIME},
+            **{name: check_runtime_value(name, data[name]) for name in SETTINGS_FIELDS},
         )
     except (KeyError, TypeError, ValueError) as exc:
         log.warning("Ignoring unreadable published defaults (%s): %.200s", exc, raw)
@@ -141,30 +138,12 @@ class ChatInfo:
 
 async def chats(storage: Storage, chat_id: int | None = None) -> list[ChatInfo]:
     """Chats in the bot's memory (or just `chat_id`), the most recently active first."""
-    where, params = ("WHERE chat_id = ?", (chat_id,)) if chat_id is not None else ("", ())
-    async with storage.db.execute(
-        f"SELECT chat_id, COUNT(*), MAX(created_at) FROM messages {where} GROUP BY chat_id ORDER BY 3 DESC", params
-    ) as cursor:
-        rows = await cursor.fetchall()
-    async with storage.db.execute(f"SELECT chat_id, updated_at FROM summaries {where}", params) as cursor:
-        summaries = {row[0]: row[1] for row in await cursor.fetchall()}
-    async with storage.db.execute("SELECT key, value FROM meta WHERE key GLOB ?", (CHAT_TITLE_PREFIX + "*",)) as cursor:
-        titles = {row[0].removeprefix(CHAT_TITLE_PREFIX): row[1] for row in await cursor.fetchall()}
-    return [ChatInfo(chat, titles.get(str(chat)), count, last, summaries.get(chat)) for chat, count, last in rows]
-
-
-async def top_authors(storage: Storage, chat_id: int, limit: int = 5) -> list[str]:
-    """The most active people of a chat: without chat titles, this is how the owner tells chats apart."""
-    async with storage.db.execute(
-        "SELECT author FROM messages WHERE chat_id = ? AND is_bot = 0 GROUP BY user_id ORDER BY COUNT(*) DESC LIMIT ?",
-        (chat_id, limit),
-    ) as cursor:
-        return [row[0] for row in await cursor.fetchall()]
-
-
-async def latest_messages(storage: Storage, chat_id: int, limit: int) -> list[StoredMessage]:
-    """The chat's `limit` newest messages, oldest first."""
-    return await storage.messages_before(chat_id, sys.maxsize, limit)
+    summaries = await storage.summary_times()
+    titles = await storage.meta_with_prefix(CHAT_TITLE_PREFIX)
+    return [
+        ChatInfo(chat, titles.get(str(chat)), count, last, summaries.get(chat))
+        for chat, count, last in await storage.chat_activity(chat_id)
+    ]
 
 
 @dataclass(frozen=True, slots=True)

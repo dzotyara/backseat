@@ -53,3 +53,22 @@ async def test_summary_settings_and_meta(storage: Storage) -> None:
 
     await storage.set_meta("digest:x", "sent")
     assert await storage.get_meta("digest:x") == "sent"
+
+
+async def test_what_the_panel_reads(storage: Storage) -> None:
+    channel = 1_300_000_000_000_000_000
+    for i, (user_id, author) in enumerate([(IVAN, "Иван"), (IVAN, "Иван"), (111, "Петя")], start=1):
+        await storage.add_message(msg(i, f"m{i}", user_id=user_id, author=author))
+    await storage.add_message(msg(4, "я бот", is_bot=True))
+    await storage.add_message(msg(5, "в канале", chat_id=channel))
+
+    assert await storage.chat_activity() == [(channel, 1, BASE_TS + 5 * 60), (CHAT, 4, BASE_TS + 4 * 60)]
+    assert await storage.chat_activity(CHAT) == [(CHAT, 4, BASE_TS + 4 * 60)]
+    assert await storage.top_authors(CHAT, 5) == ["Иван", "Петя"]  # the bot is not one of them
+    assert [m.message_id for m in await storage.latest_messages(CHAT, 2)] == [3, 4]
+
+    await storage.set_summary(CHAT, "сводка", 2, BASE_TS)
+    assert await storage.summary_times() == {CHAT: BASE_TS}
+    for key, value in {"chat_title:-1001": "Чат", "chat_titles": "не то", "heartbeat": "1"}.items():
+        await storage.set_meta(key, value)
+    assert await storage.meta_with_prefix("chat_title:") == {"-1001": "Чат"}

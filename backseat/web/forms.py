@@ -7,13 +7,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Self
 
-from backseat.bot_config import Runtime
+from backseat.bot_config import SETTINGS_FIELDS, Runtime, parse_names
 from backseat.web.formatting import format_seconds, number
 
 MAX_PERSONA_CHARS = 100_000
-# Runtime fields on the behaviour form; "paused" is the switch, not part of it.
-RUNTIME_FIELDS = ("models", "unprompted_cooldown_seconds", "reactions_enabled", "weekly_digest")
-BEHAVIOUR_FIELDS = ("names", *RUNTIME_FIELDS)  # each can be reset to its default on its own
+# The behaviour form: the names and the Runtime fields but the pause, which is the switch.
+BEHAVIOUR_FIELDS = ("names", *SETTINGS_FIELDS)  # each can be reset to its default on its own
 
 _MODEL_RE = re.compile(r"[^/\s]+/\S+")
 
@@ -32,10 +31,6 @@ def clean_persona(raw: str) -> tuple[str, str | None]:
         limit, size = number(MAX_PERSONA_CHARS), number(len(text))
         return text, f"Слишком длинно: можно не больше {limit} символов, а здесь {size}."
     return text, None
-
-
-def split_names(text: str) -> list[str]:
-    return list(dict.fromkeys(name.strip() for name in re.split(r"[,;\n]+", text) if name.strip()))
 
 
 def split_models(text: str) -> list[str]:
@@ -82,7 +77,7 @@ class Behaviour:
         return behaviour
 
     def _check(self) -> None:
-        self.names = split_names(self.names_text)
+        self.names = parse_names(self.names_text)
         if not self.names:
             self.errors["names"] = "Нужно хотя бы одно имя."
 

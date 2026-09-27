@@ -5,6 +5,7 @@ import logging
 
 import uvicorn
 
+from backseat.logs import setup_logging
 from backseat.web.app import create_app
 from backseat.web.settings import WebSettings
 
@@ -13,7 +14,7 @@ log = logging.getLogger("backseat.web")
 
 def main() -> None:
     settings = WebSettings()
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    setup_logging("INFO")
     if settings.web_host not in ("127.0.0.1", "localhost", "::1"):
         # Inside docker it has to be 0.0.0.0; then publish the port as 127.0.0.1:8090 only.
         log.warning(

@@ -181,6 +181,10 @@ class Storage:
         """The `limit` newest messages created at or after since_ts, oldest first."""
         return await self._newest("chat_id = ? AND created_at >= ?", (chat_id, since_ts), limit)
 
+    async def latest_messages(self, chat_id: int, limit: int) -> list[StoredMessage]:
+        """The chat's `limit` newest messages, oldest first."""
+        return await self._newest("chat_id = ?", (chat_id,), limit)
+
     async def count_messages(self, chat_id: int, since_ts: int = 0) -> int:
         async with self.db.execute(
             "SELECT COUNT(*) FROM messages WHERE chat_id = ? AND created_at >= ?",
@@ -195,6 +199,24 @@ class Storage:
         async with self.db.execute(
             "SELECT DISTINCT chat_id FROM messages WHERE created_at >= ?",
             (since_ts,),
+        ) as cursor:
+            return [row[0] for row in await cursor.fetchall()]
+
+    async def chat_activity(self, chat_id: int | None = None) -> list[tuple[int, int, int]]:
+        """(chat id, message count, last message time) of every chat or only of `chat_id`,
+        the most recently active first."""
+        where, params = ("WHERE chat_id = ?", (chat_id,)) if chat_id is not None else ("", ())
+        async with self.db.execute(
+            f"SELECT chat_id, COUNT(*), MAX(created_at) FROM messages {where} GROUP BY chat_id ORDER BY 3 DESC", params
+        ) as cursor:
+            return [(row[0], row[1], row[2]) for row in await cursor.fetchall()]
+
+    async def top_authors(self, chat_id: int, limit: int) -> list[str]:
+        """The names of the chat's `limit` most active people (not the bot), the most messages first."""
+        async with self.db.execute(
+            "SELECT author FROM messages WHERE chat_id = ? AND is_bot = 0 "
+            "GROUP BY user_id ORDER BY COUNT(*) DESC LIMIT ?",
+            (chat_id, limit),
         ) as cursor:
             return [row[0] for row in await cursor.fetchall()]
 
@@ -215,6 +237,11 @@ class Storage:
             (chat_id, text, upto_message_id, updated_at),
         )
         await self.db.commit()
+
+    async def summary_times(self) -> dict[int, int]:
+        """Chat id -> when its summary was last updated."""
+        async with self.db.execute("SELECT chat_id, updated_at FROM summaries") as cursor:
+            return {row[0]: row[1] for row in await cursor.fetchall()}
 
     # --- per-chat settings (persona, names) ---
 
@@ -242,6 +269,13 @@ class Storage:
         async with self.db.execute("SELECT value FROM meta WHERE key = ?", (key,)) as cursor:
             row = await cursor.fetchone()
         return row[0] if row else None
+
+    async def meta_with_prefix(self, prefix: str) -> dict[str, str]:
+        """The meta values whose keys start with `prefix`, keyed by the rest of the key."""
+        async with self.db.execute(
+            "SELECT key, value FROM meta WHERE substr(key, 1, ?) = ?", (len(prefix), prefix)
+        ) as cursor:
+            return {row[0].removeprefix(prefix): row[1] for row in await cursor.fetchall()}
 
     async def set_meta(self, key: str, value: str) -> None:
         await self.db.execute(
