@@ -53,10 +53,14 @@ REPLY #<номер сообщения из НОВОГО>
 
 # The cheap first look before an unprompted comment (PRECHECK_CONTEXT_TOKENS): a few recent lines, one word
 # back. Only "ДА" pays for the full prompt with the chat's memory, where UNPROMPTED_TASK decides for real.
+# Replayed on a week of a busy Discord channel, this wording said "ДА" to ~12% of batches; without the
+# "не повод" list it said so to 35%, and with a stated "one in ten" to 2%.
 PRECHECK_TASK = """\
-Тебя не звали. Есть ли в НОВОМ то, на что тебе по характеру стоит откликнуться: вопрос ко всем, \
-спорное заявление, хвастовство, ляп, шутка, которую можно подхватить?
-Пустая болтовня, короткие реплики и чужие личные разговоры — не повод.
+Тебя не звали. Есть ли в НОВОМ явный повод вмешаться: вопрос ко всем, на который тебе есть что ответить, \
+спорное или смешное заявление, хвастовство, ляп, шутка, которую ты можешь подхватить и развить?
+Не повод: короткие реплики и междометия, эмодзи и картинки, болтовня ни о чём, чужие личные разговоры, \
+спор, в который тебе нечего добавить.
+Хороший собеседник вмешивается редко: если сомневаешься — НЕТ.
 Ответь одним словом: ДА или НЕТ."""
 
 REACT_OPTION = """\
