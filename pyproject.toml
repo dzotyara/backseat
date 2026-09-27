@@ -1,7 +1,8 @@
 [project]
 name = "backseat"
-version = "2.1.0"
-description = "Telegram group-chat bot with long-term memory"
+version = "1.0.0"
+description = "Group-chat bots for Telegram and Discord with long-term memory"
+license = "MIT"
 requires-python = ">=3.12"
 
 [tool.pytest.ini_options]

@@ -34,7 +34,7 @@ from backseat.triggers import BotIdentity
 log = logging.getLogger(__name__)
 
 HELP_TEXT = """\
-Я Бэксит v{version}: читаю канал, помню всю беседу и иногда вставляю пару слов.
+Я {username} v{version}: читаю канал, помню всю беседу и иногда вставляю пару слов.
 Позвать меня: @{username}, ответ на моё сообщение или по имени ({names}). На обращение отвечаю всегда.
 
 Команды:

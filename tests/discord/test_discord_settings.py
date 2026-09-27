@@ -39,6 +39,8 @@ def test_example_file_is_valid() -> None:
     settings = DiscordSettings(
         _env_file=ROOT / ".env.discord.example", openrouter_api_key="sk-test", discord_bot_token="token"
     )
-    assert settings.allowed_chat_ids and settings.focus_users
+    assert settings.allowed_chat_ids
+    assert settings.bot_names == ["ботяра", "botyara"]
+    assert settings.focus_users == {}  # nobody is singled out by default on Discord
     assert settings.db_path == Path("data/discord.db")
     assert (ROOT / settings.persona_file).read_text(encoding="utf-8").strip()
