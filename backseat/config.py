@@ -90,6 +90,15 @@ class CoreSettings(BaseSettings):
     # Pictures on request («нарисуй…»): drawn for free by Pollinations, one at a time; the paid image
     # models (OpenRouter) only as a fallback and at most PAID_IMAGES_PER_DAY a day (0 = never pay).
     images_enabled: bool = True
+    # A Pollinations key (enter.pollinations.ai) unlocks their better models, paid from its pollen balance
+    # (Z-Image Turbo ≈ $0.004 a picture). Without it, or when the balance is out, the free anonymous Sana.
+    pollinations_api_key: SecretStr | None = None
+    # Cloudflare Workers AI (dash.cloudflare.com, token from the "Workers AI" template): tried first, free
+    # within its daily allocation (~$0.0006 a picture after that); the day it runs out, Pollinations draws.
+    cloudflare_account_id: str = ""
+    cloudflare_api_token: SecretStr | None = None
+    cloudflare_image_model: str = "@cf/black-forest-labs/flux-1-schnell"
+    pollinations_models: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["zimage", "flux"])
     images_per_user_per_day: int = 0  # 0 = no limit
     paid_images_per_day: int = 0
     image_models: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["openai/gpt-5-image-mini"])
@@ -102,7 +111,7 @@ class CoreSettings(BaseSettings):
 
     log_level: str = "INFO"
 
-    @field_validator("models", "providers", "bot_names", "image_models", mode="before")
+    @field_validator("models", "providers", "bot_names", "image_models", "pollinations_models", mode="before")
     @classmethod
     def _parse_str_list(cls, value: Any) -> Any:
         return _split(value)

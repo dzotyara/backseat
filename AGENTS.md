@@ -67,9 +67,11 @@ pydantic-settings. User-facing docs are in README.md (Russian).
    with fallbacks: left alone, OpenRouter served the default model from hosts 6-8x pricier than the cheapest.
    Each call logs its model, tokens, cost, provider and cached tokens.
 7. Pictures (`images.py`): an addressed message that looks like a drawing request gets a planning call
-   (`prompts.IMAGE_TASK`, full context, JSON with an English prompt and a caption); Pollinations draws
-   it for free — one request at a time, ~16 s apart, or it answers 402 — and OpenRouter's image models
-   are a paid fallback within `PAID_IMAGES_PER_DAY`. Daily counters live in `meta`.
+   (`prompts.IMAGE_TASK`, full context, JSON with an English prompt and a caption). Then, one picture
+   at a time: Cloudflare Workers AI (`CLOUDFLARE_*`, free daily allocation; skipped for the rest of the
+   UTC day once spent), Pollinations with `POLLINATIONS_API_KEY` (`POLLINATIONS_MODELS` in order),
+   anonymous Pollinations (Sana, ~16 s apart or it answers 402), and OpenRouter's image models as a
+   paid fallback within `PAID_IMAGES_PER_DAY`. Daily counters live in `meta`.
 8. Discord moderation (`discord/moderation.py`): an addressed message from `MODERATOR_IDS` that mentions
    nicks, roles or colours is parsed by the model into JSON actions (nick, give/take/create role,
    colour); the code resolves members by id from the recent chat authors and runs them. Nothing

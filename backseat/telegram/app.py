@@ -6,9 +6,11 @@ from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramAPIError
+from pydantic import SecretStr
 
 from backseat import __version__
 from backseat.bot_config import BotConfig
+from backseat.config import CoreSettings
 from backseat.context import ContextBuilder
 from backseat.digest import WeeklyDigest
 from backseat.heartbeat import beat, remember_chat_title, run_heartbeat
@@ -22,6 +24,18 @@ from backseat.telegram.handlers import Services, create_router, register_command
 from backseat.telegram.settings import TelegramSettings
 from backseat.telegram.transport import TelegramTransport
 from backseat.triggers import BotIdentity
+
+
+def _secret(value: SecretStr | None) -> str | None:
+    return value.get_secret_value() if value else None
+
+
+def _cloudflare(settings: CoreSettings) -> tuple[str, str, str] | None:
+    token = _secret(settings.cloudflare_api_token)
+    if not (settings.cloudflare_account_id and token):
+        return None
+    return settings.cloudflare_account_id, token, settings.cloudflare_image_model
+
 
 log = logging.getLogger("backseat")
 
@@ -44,7 +58,12 @@ async def run(settings: TelegramSettings) -> None:
     bot = Bot(settings.telegram_bot_token.get_secret_value())
     transport = TelegramTransport(bot)
     llm = LLMClient(settings)
-    images = ImageMaker(storage, llm)
+    images = ImageMaker(
+        storage,
+        llm,
+        pollinations_key=_secret(settings.pollinations_api_key),
+        cloudflare=_cloudflare(settings),
+    )
     background: list[asyncio.Task[None]] = []
     responder: Responder | None = None
     try:

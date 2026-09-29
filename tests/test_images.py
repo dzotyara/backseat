@@ -174,3 +174,57 @@ async def test_openrouter_image_models(tmp_path: Path) -> None:
     assert await client.generate_image("a cat", models=["broken/model", "good/model"]) == b"\x89PNG!"
     assert [c["model"] for c in calls] == ["broken/model", "good/model"]
     assert calls[0]["modalities"] == ["image", "text"]
+
+
+def artists(cloudflare: list[int], keyed: list[int], anonymous: list[int]) -> tuple[httpx.AsyncClient, list[str]]:
+    """Cloudflare, keyed and anonymous Pollinations that answer these statuses in turn (200 = a picture)."""
+    calls: list[str] = []
+    queues = {"api.cloudflare.com": cloudflare, "gen.pollinations.ai": keyed, "image.pollinations.ai": anonymous}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        host = request.url.host
+        calls.append(host if host != "gen.pollinations.ai" else f"{host}:{request.url.params['model']}")
+        status = queues[host].pop(0) if queues[host] else 200
+        if host == "api.cloudflare.com":
+            if status == 200:
+                return httpx.Response(200, json={"success": True, "result": {"image": base64.b64encode(JPEG).decode()}})
+            return httpx.Response(
+                status, json={"success": False, "errors": [{"code": 4006, "message": "daily free allocation exceeded"}]}
+            )
+        if status == 200:
+            return httpx.Response(200, content=JPEG, headers={"content-type": "image/jpeg"})
+        return httpx.Response(status, json={})
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler)), calls
+
+
+async def test_cheapest_artist_first_and_cloudflare_rests_once_its_allocation_is_spent(
+    tmp_path: Path, storage: Storage
+) -> None:
+    http, calls = artists(cloudflare=[200, 429], keyed=[402, 200], anonymous=[])
+    clock = Clock()
+    maker = ImageMaker(
+        storage,
+        FakeLLM(),  # type: ignore[arg-type]
+        http=http,
+        clock=clock,
+        sleep=clock.sleep,
+        pollinations_key="sk-test",
+        cloudflare=("acc", "cf-token", "@cf/flux"),
+    )
+    rt = await runtime(tmp_path, storage)
+    assert await maker.draw("a cat", rt) == JPEG
+    assert calls == ["api.cloudflare.com"]
+    calls.clear()
+    assert await maker.draw("a dog", rt) == JPEG  # allocation spent: zimage out of pollen, flux draws
+    assert calls == ["api.cloudflare.com", "gen.pollinations.ai:zimage", "gen.pollinations.ai:flux"]
+    calls.clear()
+    assert await maker.draw("a cow", rt) == JPEG  # Cloudflare is not asked again today
+    assert calls == ["gen.pollinations.ai:zimage"]
+
+
+async def test_without_keys_only_the_anonymous_sana(tmp_path: Path, storage: Storage) -> None:
+    http, calls = artists(cloudflare=[], keyed=[], anonymous=[200])
+    maker = ImageMaker(storage, FakeLLM(), http=http)  # type: ignore[arg-type]
+    assert await maker.draw("a cat", await runtime(tmp_path, storage)) == JPEG
+    assert calls == ["image.pollinations.ai"]

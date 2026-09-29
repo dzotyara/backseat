@@ -10,9 +10,11 @@ from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
+from pydantic import SecretStr
 
 from backseat import __version__
 from backseat.bot_config import BotConfig
+from backseat.config import CoreSettings
 from backseat.context import ContextBuilder
 from backseat.digest import WeeklyDigest
 from backseat.discord.backfill import backfill, fold_history
@@ -37,6 +39,18 @@ from backseat.storage import Storage
 from backseat.summarizer import Summarizer
 from backseat.triggers import BotIdentity
 
+
+def _secret(value: SecretStr | None) -> str | None:
+    return value.get_secret_value() if value else None
+
+
+def _cloudflare(settings: CoreSettings) -> tuple[str, str, str] | None:
+    token = _secret(settings.cloudflare_api_token)
+    if not (settings.cloudflare_account_id and token):
+        return None
+    return settings.cloudflare_account_id, token, settings.cloudflare_image_model
+
+
 log = logging.getLogger("backseat.discord")
 
 
@@ -54,7 +68,12 @@ class BackseatClient(discord.Client):
         self.bot_config = BotConfig(storage, settings, platform=self.transport.platform)
         self.formatter = LineFormatter(ZoneInfo(settings.timezone), settings.focus_users)
         self.moderation = Moderation(storage, llm)
-        self.images = ImageMaker(storage, llm)
+        self.images = ImageMaker(
+            storage,
+            llm,
+            pollinations_key=_secret(settings.pollinations_api_key),
+            cloudflare=_cloudflare(settings),
+        )
         self.summarizer = Summarizer(storage, llm, settings, self.formatter, bot_config=self.bot_config)
         self.services: Services | None = None  # set in setup_hook, once the bot knows who it is
         self._background: set[asyncio.Task[None]] = set()

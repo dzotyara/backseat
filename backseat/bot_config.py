@@ -42,6 +42,7 @@ SETTINGS_FIELDS = (
     "summary_enabled",
     "system_template",
     "images_enabled",
+    "pollinations_models",
     "images_per_user_per_day",
     "paid_images_per_day",
     "image_models",
@@ -70,6 +71,7 @@ class Runtime:
     summary_enabled: bool
     system_template: str
     images_enabled: bool
+    pollinations_models: list[str]  # with a Pollinations key: tried in order
     images_per_user_per_day: int  # 0 = no limit
     paid_images_per_day: int  # 0 = never pay for a picture
     image_models: list[str]
@@ -154,6 +156,7 @@ _CHECKS: dict[str, Callable[[object], Any]] = {
     "summary_enabled": _flag,
     "system_template": _text,
     "images_enabled": _flag,
+    "pollinations_models": _words,
     "images_per_user_per_day": _integer(*IMAGES_RANGE),
     "paid_images_per_day": _integer(*IMAGES_RANGE),
     "image_models": _models,

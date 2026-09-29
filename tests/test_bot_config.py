@@ -76,6 +76,7 @@ async def test_runtime_defaults_come_from_settings(config: BotConfig) -> None:
         summary_enabled=True,
         system_template=SYSTEM_TEMPLATE,  # empty SYSTEM_TEMPLATE setting = the built-in rules
         images_enabled=True,
+        pollinations_models=["zimage", "flux"],
         images_per_user_per_day=0,
         paid_images_per_day=0,
         image_models=["openai/gpt-5-image-mini"],

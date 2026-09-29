@@ -1,9 +1,11 @@
 """Pictures on request: «ботяра, нарисуй кота в танке». The chat model turns the request into an English
-prompt and a caption in character; Pollinations draws it for free, one picture at a time (it refuses a
-second request right after the first); OpenRouter's paid image models are a fallback only up to the
-panel's daily cap."""
+prompt and a caption in character, then the cheapest artist that answers draws it, one picture at a time:
+Cloudflare Workers AI (free within its daily allocation), Pollinations with a key (its better models, paid
+in pollen), anonymous Pollinations (free, the weak Sana, ~16 s between requests). OpenRouter's image
+models are a last paid fallback, only up to the panel's daily cap."""
 
 import asyncio
+import base64
 import json
 import logging
 import random
@@ -25,8 +27,11 @@ log = logging.getLogger(__name__)
 REQUEST_RE = re.compile(
     r"нарису|рисан|рисун|картин|изобраз|сгенер|нагенер|пикч|\bарт\b|draw|picture|image|generate", re.IGNORECASE
 )
-POLLINATIONS_URL = "https://image.pollinations.ai/prompt/{prompt}"
-FREE_GAP_SECONDS = 16.0  # Pollinations answers 402 to a request that comes right after the previous one
+POLLINATIONS_URL = "https://image.pollinations.ai/prompt/{prompt}"  # anonymous: only the weak Sana
+POLLINATIONS_KEYED_URL = "https://gen.pollinations.ai/image/{prompt}"  # with a key: the models it allows
+FREE_GAP_SECONDS = 16.0  # anonymous Pollinations answers 402 to a request right after the previous one
+KEYED_SECONDS = 6.0  # about how long a picture takes with a key, for the queue estimate
+CLOUDFLARE_URL = "https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/{model}"
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
@@ -61,8 +66,13 @@ class ImageMaker:
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         gap: float = FREE_GAP_SECONDS,
+        pollinations_key: str | None = None,
+        cloudflare: tuple[str, str, str] | None = None,  # (account id, token, model)
     ) -> None:
         self._storage = storage
+        self._key = pollinations_key
+        self._cloudflare = cloudflare
+        self._cloudflare_out_on: str | None = None  # the UTC day its free allocation ran out
         self._llm = llm
         self._http = http or httpx.AsyncClient(timeout=90, follow_redirects=True)
         self._clock = clock
@@ -111,11 +121,18 @@ class ImageMaker:
         self._queued += 1
         try:
             position = self._queued
-            wait = max(0.0, self._free_at - self._clock()) + (position - 1) * self._gap
+            if self._cloudflare or (self._key and runtime.pollinations_models):
+                wait = (position - 1) * KEYED_SECONDS
+            else:
+                wait = max(0.0, self._free_at - self._clock()) + (position - 1) * self._gap
             if on_queue is not None and wait > 3:
                 await on_queue(position, round(wait))
             async with self._lock:
-                image = await self._free(prompt)
+                image = await self._workers_ai(prompt)
+                if image is None:
+                    image = await self._keyed(prompt, runtime.pollinations_models)
+                if image is None:
+                    image = await self._free(prompt)
         finally:
             self._queued -= 1
         if image is not None:
@@ -129,6 +146,56 @@ class ImageMaker:
             return None
         await self._bump("paid")
         return image
+
+    async def _workers_ai(self, prompt: str) -> bytes | None:
+        """Cloudflare Workers AI; None without an account, on any failure, and for the rest of a UTC day
+        once its free allocation is spent (it would only keep refusing)."""
+        if self._cloudflare is None:
+            return None
+        today = time.strftime("%Y-%m-%d", time.gmtime())
+        if self._cloudflare_out_on == today:
+            return None
+        account, token, model = self._cloudflare
+        try:
+            response = await self._http.post(
+                CLOUDFLARE_URL.format(account=account, model=model),
+                headers={"Authorization": f"Bearer {token}"},
+                json={"prompt": prompt, "steps": 4, "seed": random.randrange(10**9)},
+            )
+            data = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            log.warning("Cloudflare Workers AI unavailable: %r", exc)
+            return None
+        image = (data.get("result") or {}).get("image") if isinstance(data, dict) else None
+        if response.status_code == 200 and isinstance(image, str):
+            log.info("Cloudflare picture model=%s", model)
+            return base64.b64decode(image)
+        errors = str(data.get("errors") if isinstance(data, dict) else data)[:300]
+        if response.status_code == 429 or "allocation" in errors.lower() or "4006" in errors:
+            self._cloudflare_out_on = today
+            log.info("Cloudflare free allocation is spent for %s: %s", today, errors)
+        else:
+            log.warning("Cloudflare refused a picture: HTTP %s %s", response.status_code, errors)
+        return None
+
+    async def _keyed(self, prompt: str, models: list[str]) -> bytes | None:
+        """The key's models in order; None without a key, or when every model failed (e.g. no pollen left)."""
+        if not self._key:
+            return None
+        url = POLLINATIONS_KEYED_URL.format(prompt=urllib.parse.quote(prompt, safe=""))
+        headers = {"Authorization": f"Bearer {self._key}"}
+        for model in models:
+            params = {"model": model, "width": 1024, "height": 1024, "safe": "true", "seed": random.randrange(10**9)}
+            try:
+                response = await self._http.get(url, params=params, headers=headers)
+            except httpx.HTTPError as exc:
+                log.warning("Pollinations %s unavailable: %r", model, exc)
+                continue
+            if response.status_code == 200 and response.headers.get("content-type", "").startswith("image/"):
+                log.info("Pollinations picture model=%s", model)
+                return response.content
+            log.warning("Pollinations %s refused: HTTP %s %.200s", model, response.status_code, response.text)
+        return None
 
     async def _free(self, prompt: str) -> bytes | None:
         """Pollinations, with one retry after the pause it wants between requests. Call under the lock."""
