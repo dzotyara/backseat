@@ -147,7 +147,7 @@ async def test_a_drawing_request_gets_a_picture(tmp_path: Path, storage: Storage
     assert (sent.image, sent.text, sent.reply_to, sent.notify) == (JPEG, "Держи, танкист", 5, True)
     assert '"draw": true' in llm.prompt_text() and "К тебе обратились в сообщении #1" in llm.prompt_text()
     remembered = await storage.get_message(CHAT, sent.message_id)
-    assert remembered is not None and remembered.text.startswith("[картинка: a cat driving a tank")
+    assert remembered is not None and remembered.text == "[картинка] Держи, танкист"  # no prompt in the transcript
     await responder.shutdown()
 
 

@@ -264,7 +264,9 @@ class Responder:
         sent = await self._transport.send_image(chat_id, picture, drawing.caption, reply_to=reply_to, notify=True)
         if sent is not None:
             # The model later sees what it drew as its own message, with the prompt it drew from.
-            await self.remember(chat_id, sent, f"[картинка: {drawing.prompt}] {drawing.caption}".strip(), reply_to)
+            # Short, like the other media marks: the English prompt in the transcript made the bot see itself
+            # as a drawing bot («я бот-художник, давай нарисую»), and it copied the prompts into its answers.
+            await self.remember(chat_id, sent, f"[картинка] {drawing.caption}".strip(), reply_to)
             await images.count_drawn(target.user_id)
             self._state(chat_id).last_comment_at = self._clock()
         log.info("chat=%s drew a picture for message=%s", chat_id, reply_to)

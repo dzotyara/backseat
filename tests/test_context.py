@@ -146,3 +146,10 @@ async def test_precheck_sees_only_the_latest_lines_and_no_memory(
     assert "болтовня номер 29" in body and "болтовня номер 20" not in body
     assert "НОВОЕ:\n" in body and "Иван[700000001]: я теперь марафонец" in body
     assert body.endswith("Ответь одним словом: ДА или НЕТ.")
+
+
+def test_the_service_rules_never_mention_drawing() -> None:
+    # «ты не бот-художник» in the rules made the bot introduce itself as one.
+    from backseat.prompts import SYSTEM_TEMPLATE
+
+    assert "художник" not in SYSTEM_TEMPLATE and "картинк" not in SYSTEM_TEMPLATE
