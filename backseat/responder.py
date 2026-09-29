@@ -30,6 +30,8 @@ from backseat.prompts import (
     IMAGE_QUEUE_REPLY,
     IMAGE_QUOTA_REPLY,
     IMAGE_TASK,
+    MODERATION_WORDS_RE,
+    NO_MODERATION_NOTE,
     REACT_OPTION,
     REACTION_EMOJIS,
     UNPROMPTED_TASK,
@@ -62,6 +64,12 @@ class _ChatState:
     # user id -> no model-written answer to them before this (REPLY_FREEZE_SECONDS)
     frozen_until: dict[int, float] = field(default_factory=dict)
     told_frozen: set[int] = field(default_factory=set)  # who already got "not ready" during their freeze
+
+
+def _moderation_note(messages: list[StoredMessage]) -> str:
+    """NO_MODERATION_NOTE when someone asks for a nick, a role, a mute or a ban: by now nobody runs it."""
+    asked = any(not message.is_bot and MODERATION_WORDS_RE.search(message.text) for message in messages)
+    return NO_MODERATION_NOTE if asked else ""
 
 
 def _unprompted_task(reactions_enabled: bool) -> tuple[str, tuple[str, ...]]:
@@ -182,14 +190,15 @@ class Responder:
                 await self._tell_frozen(chat_id, target, left)
                 continue
             author = self._context.formatter.author(target)
+            note = _moderation_note([target])
             if self._wants_picture(target, runtime) and await self._draw(chat_id, messages, target, author, runtime):
                 self._freeze(state, target.user_id, runtime)
                 continue
             prompt = await self._context.for_reply(
                 chat_id,
                 messages,
-                lambda ids, target_id=target_id, author=author: ADDRESSED_TASK.format(
-                    message_id=ids.short(target_id), author=author
+                lambda ids, target_id=target_id, author=author, note=note: (
+                    ADDRESSED_TASK.format(message_id=ids.short(target_id), author=author) + note
                 ),
             )
             text = ""
@@ -287,6 +296,7 @@ class Responder:
         if runtime.precheck_context_tokens > 0 and not await self._worth_a_look(chat_id, messages, runtime):
             return
         task, emojis = _unprompted_task(runtime.reactions_enabled)
+        task += _moderation_note(messages)
         prompt = await self._context.for_reply(chat_id, messages, lambda ids: task)
         try:
             completion = await self._complete(prompt.messages, runtime)

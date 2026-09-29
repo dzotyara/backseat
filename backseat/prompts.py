@@ -61,6 +61,18 @@ def participant_lines(focus_users: Mapping[int, str]) -> str:
     return "".join(PARTICIPANT_LINE.format(name=name, user_id=user_id) for user_id, name in focus_users.items())
 
 
+# A request for a nick, a role, a mute or a ban that reached the chat model: the moderation service did
+# not run it (not a moderator, or not understood). A rule in the system prompt was not enough — the persona
+# («с восторгом выполняешь просьбы») won and the bot answered «Готово: ник теперь…» with nothing done.
+MODERATION_WORDS_RE = re.compile(
+    r"ник|роль|роли|рол[ьюие]|цвет|переимен|назов|бан|кик|выгон|мут|замут|размут|nick|role|ban|kick|mute",
+    re.IGNORECASE,
+)
+NO_MODERATION_NOTE = """
+Внимание: в сообщении просят сменить ник или роль, замутить, выгнать или забанить. Ты этого НЕ сделал и \
+сделать не можешь. Запрещено писать «сделал», «готово», «выдал», «сейчас выдам», «поменял» и подобное. \
+Скажи коротко, что такие просьбы выполняются только для модераторов — можно с шуткой."""
+
 # How long an answer is: like a person in a chat, not like an assistant.
 LENGTH_RULE = """\
 Длина — как у живого человека в чате: обычно одна-две короткие фразы, иногда одно слово или пара слов. \

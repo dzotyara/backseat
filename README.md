@@ -16,7 +16,7 @@
   <img alt="LLM via OpenRouter" src="https://img.shields.io/badge/LLM-OpenRouter-6E56CF">
   <img alt="Memory in SQLite" src="https://img.shields.io/badge/memory-SQLite-003B57?logo=sqlite&logoColor=white">
   <img alt="Docker Compose" src="https://img.shields.io/badge/deploy-Docker%20Compose-2496ED?logo=docker&logoColor=white">
-  <img alt="271 tests" src="https://img.shields.io/badge/tests-271%20passed-2EA043">
+  <img alt="272 tests" src="https://img.shields.io/badge/tests-272%20passed-2EA043">
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-F2C94C"></a>
 </p>
 
@@ -197,7 +197,7 @@ python -m venv .venv
 .venv/Scripts/ruff check backseat tests
 ```
 
-271 тестов не ходят в сеть: Telegram, Discord и нейросеть подменены. Путь от входящего апдейта
+272 тестов не ходят в сеть: Telegram, Discord и нейросеть подменены. Путь от входящего апдейта
 до ответа проверяется через настоящий диспетчер aiogram, а панель — через тестовый клиент FastAPI.
 
 ```text

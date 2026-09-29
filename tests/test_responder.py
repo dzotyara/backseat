@@ -351,3 +351,20 @@ async def test_two_callers_in_one_batch_are_both_answered(tmp_path: Path, storag
     await responder.process(CHAT)
     assert [(s.reply_to, s.text) for s in transport.sent] == [(1, "Ивану."), (2, "Пете.")]
     await responder.shutdown()
+
+
+async def test_a_nick_request_that_reached_the_chat_model_forbids_saying_done(tmp_path: Path, storage: Storage) -> None:
+    settings = make_settings(tmp_path, **SLOW)
+    llm, transport = FakeLLM("Это только для модераторов, дружище."), FakeTransport()
+    responder = make_responder(settings, storage, llm, transport)
+    await add(storage, 5, "ботяра, сделай мне ник Крутой")
+    responder.enqueue(CHAT, Incoming(5, IVAN, addressed=True, trivial=False))
+    await responder.process(CHAT)
+    assert "Запрещено писать «сделал», «готово»" in llm.prompt_text()
+
+    await add(storage, 6, "ботяра, как дела?")
+    responder.enqueue(CHAT, Incoming(6, IVAN, addressed=True, trivial=False))
+    llm.answers.append("Норм.")
+    await responder.process(CHAT)
+    assert len(llm.calls) == 2 and "Запрещено писать" not in llm.prompt_text()
+    await responder.shutdown()
