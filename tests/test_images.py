@@ -296,3 +296,16 @@ def test_quota_renews_at_midnight_utc_on_the_chat_clock() -> None:
     evening = datetime(2026, 9, 29, 22, 30, tzinfo=UTC)
     assert quota_renews_at(ZoneInfo("Europe/Moscow"), evening) == "03:00"
     assert quota_renews_at(ZoneInfo("UTC"), evening) == "00:00"
+
+
+async def test_cloudflare_gets_only_the_fields_its_model_accepts(tmp_path: Path, storage: Storage) -> None:
+    bodies: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"success": True, "result": {"image": base64.b64encode(JPEG).decode()}})
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    maker = ImageMaker(storage, FakeLLM(), http=http, cloudflare=("acc", "tok", "@cf/flux"))  # type: ignore[arg-type]
+    assert await maker.draw("a cat", await runtime(tmp_path, storage, image_fallbacks=False)) == JPEG
+    assert bodies == [{"prompt": "a cat", "steps": 4}]

@@ -194,7 +194,7 @@ class ImageMaker:
             response = await self._http.post(
                 CLOUDFLARE_URL.format(account=account, model=model),
                 headers={"Authorization": f"Bearer {token}"},
-                json={"prompt": prompt, "steps": 4, "seed": random.randrange(10**9)},
+                json={"prompt": prompt, "steps": 4},  # FLUX.1 Schnell rejects any other field, even a seed
             )
             data = response.json()
         except (httpx.HTTPError, ValueError) as exc:
