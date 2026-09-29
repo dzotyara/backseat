@@ -23,6 +23,7 @@ from backseat.transport import Sent
 from tests.discord.fakes import (
     BASE,
     CHANNEL,
+    IVAN,
     OTHER_CHANNEL,
     OWNER,
     PETYA,
@@ -67,6 +68,18 @@ async def test_help_lists_owner_commands_to_owners_only(svc: Services) -> None:
     assert "@Бэксит" in text and "бэксит, ботяра" in text and "/digest" in text
     assert "/prompt" not in text and "/status" not in text
     assert "/prompt" in only_reply(owner).content
+
+
+async def test_help_shows_the_moderator_memo_to_moderators_only(svc: Services) -> None:
+    await svc.bot_config.set_runtime(moderator_ids=[IVAN])
+    moderator, member = FakeInteraction(IVAN), FakeInteraction(PETYA)
+    await cmd_help(svc, moderator)  # type: ignore[arg-type]
+    await cmd_help(svc, member)  # type: ignore[arg-type]
+    memo = only_reply(moderator).content
+    assert "Памятка модератора" in memo and "«бэксит, поменяй Ивокси ник на Антон»" in memo
+    assert "/prompt" not in memo  # a moderator is not an owner
+    assert "Памятка модератора" not in only_reply(member).content
+    assert "«бэксит, нарисуй кота в танке»" in only_reply(member).content
 
 
 async def test_names_are_shown_to_everyone_but_changed_by_the_owner_only(svc: Services) -> None:

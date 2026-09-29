@@ -35,6 +35,7 @@ log = logging.getLogger(__name__)
 HELP_TEXT = """\
 Я {username} v{version}: читаю канал, помню всю беседу и иногда вставляю пару слов.
 Позвать меня: @{username}, ответ на моё сообщение или по имени ({names}). На обращение отвечаю всегда.
+Попроси «{first_name}, нарисуй кота в танке» — нарисую картинку.
 
 Команды:
 /names — на какие имена откликаюсь
@@ -47,6 +48,24 @@ OWNER_HELP = """
 /prompt — показать мой характер. Поменять: text или файлом .txt/.md, вернуть по умолчанию: reset
 /names с именами через запятую — поменять имена, «сброс» — вернуть по умолчанию
 /status — модели, память по каналам, расходы и лимиты"""
+
+# Shown in /help only to MODERATOR_IDS (web panel).
+MODERATOR_HELP = """
+
+🛡️ Памятка модератора — это видишь только ты.
+Ники и роли меняю по просьбе обычным текстом, обратившись ко мне (@, ответ или по имени):
+• ник: «{first_name}, поменяй Ивокси ник на Антон»
+• вернуть обычное имя: «{first_name}, сбрось ник Ивокси»
+• выдать роль (нет такой — создам): «{first_name}, дай Ивокси роль Морпех»
+• роль с цветом: «{first_name}, дай Ивокси роль Морпех цвета хаки»
+• новая роль без выдачи: «{first_name}, создай роль Салаги, цвет зелёный»
+• перекрасить роль: «{first_name}, перекрась роль Морпех в красный»
+• забрать роль: «{first_name}, забери у Ивокси роль Морпех»
+Можно несколько дел в одном сообщении: «ник Антон, роль Морпех, цвет хаки».
+Людей называй как угодно — по нику, по-русски или @упоминанием; если не пойму, о ком речь, — переспрошу.
+После каждого действия отчитываюсь строкой: ✅ сделано или ⚠️ почему нет.
+Не смогу: поменять ник владельцу сервера и трогать тех, чья роль выше моей, — так устроен Discord.
+Служебные роли ботов и @everyone не трогаю. Банов и киков не делаю."""
 
 NOT_OWNER = "Эта команда только для владельца бота."
 
@@ -86,8 +105,12 @@ async def _owner_only(svc: Services, interaction: discord.Interaction, denial: s
 
 
 async def cmd_help(svc: Services, interaction: discord.Interaction) -> None:
-    names = ", ".join(await svc.bot_config.names())
-    text = HELP_TEXT.format(version=__version__, username=svc.me.username, names=names)
+    all_names = await svc.bot_config.names()
+    first_name = all_names[0] if all_names else svc.me.username
+    names = ", ".join(all_names)
+    text = HELP_TEXT.format(version=__version__, username=svc.me.username, names=names, first_name=first_name)
+    if interaction.user.id in (await svc.bot_config.runtime()).moderator_ids:
+        text += MODERATOR_HELP.format(first_name=first_name)
     if interaction.user.id in svc.owners:
         text += OWNER_HELP
     await _private(interaction, text)
