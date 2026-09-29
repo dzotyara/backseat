@@ -15,7 +15,7 @@
   <img alt="LLM via OpenRouter" src="https://img.shields.io/badge/LLM-OpenRouter-6E56CF">
   <img alt="Memory in SQLite" src="https://img.shields.io/badge/memory-SQLite-003B57?logo=sqlite&logoColor=white">
   <img alt="Docker Compose" src="https://img.shields.io/badge/deploy-Docker%20Compose-2496ED?logo=docker&logoColor=white">
-  <img alt="262 tests" src="https://img.shields.io/badge/tests-262%20passed-2EA043">
+  <img alt="264 tests" src="https://img.shields.io/badge/tests-264%20passed-2EA043">
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-F2C94C"></a>
 </p>
 
@@ -43,10 +43,9 @@
 - 🎛️ **Веб-панель:** характер и служебные правила, пауза, имена, каналы, модели и хостинги, длина ответа,
   паузы, объём памяти, сводка, модераторы, память и расходы — всё без перезапуска.
 - 🎨 **Рисует по просьбе:** «ботяра, нарисуй кота в танке» — и через пару секунд в чате картинка
-  с подписью в характере бота. Рисует тот, кто дешевле: Cloudflare Workers AI (бесплатно в пределах
-  дневной квоты), Pollinations по ключу (~$0.004 за картинку), бесплатная Pollinations без ключа;
-  по одной картинке, остальные ждут в очереди. Платная модель OpenRouter — только запасная и в
-  пределах дневного лимита из панели.
+  с подписью в характере бота. Рисует бесплатный Cloudflare Workers AI (~170 картинок в сутки), по одной,
+  остальные ждут в очереди; когда квота кончится, бот скажет, во сколько она обновится. В панели можно
+  включить запасные рисовалки (Pollinations) и платную модель OpenRouter с дневным лимитом.
 - 🛡️ **Discord: ники и роли по просьбе.** Модератор пишет боту обычным текстом — «ботяра, поменяй Ивокси
   ник на Антон, роль Морпех, цвет хаки», — и бот меняет ник, создаёт или перекрашивает роль и выдаёт её.
   Кто модератор — задаётся в панели; просьбы остальных бот не выполняет.
@@ -193,7 +192,7 @@ python -m venv .venv
 .venv/Scripts/ruff check backseat tests
 ```
 
-262 тестов не ходят в сеть: Telegram, Discord и нейросеть подменены. Путь от входящего апдейта
+264 тестов не ходят в сеть: Telegram, Discord и нейросеть подменены. Путь от входящего апдейта
 до ответа проверяется через настоящий диспетчер aiogram, а панель — через тестовый клиент FastAPI.
 
 ```text

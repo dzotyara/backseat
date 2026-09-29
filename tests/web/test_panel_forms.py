@@ -90,7 +90,7 @@ def test_behaviour_is_saved_as_overrides_only(panel: Panel) -> None:
     page = panel.client.get("/bots/telegram/settings").text
     assert 'value="бэксит, ботяра"' in page and "\n".join(BOT_MODELS) in page
     defaults_shown = page.count('class="chip chip-muted">по умолчанию')
-    assert defaults_shown == 22  # names + 21 settings (no moderators: that is Discord's)
+    assert defaults_shown == 23  # names + 22 settings (no moderators: that is Discord's)
 
     form = {
         "names": "Железяка; бот,, бот",

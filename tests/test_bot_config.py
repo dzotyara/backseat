@@ -76,6 +76,7 @@ async def test_runtime_defaults_come_from_settings(config: BotConfig) -> None:
         summary_enabled=True,
         system_template=SYSTEM_TEMPLATE,  # empty SYSTEM_TEMPLATE setting = the built-in rules
         images_enabled=True,
+        image_fallbacks=False,
         pollinations_models=["zimage", "flux"],
         image_shape="square",
         image_size=1024,

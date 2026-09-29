@@ -42,6 +42,7 @@ SETTINGS_FIELDS = (
     "summary_enabled",
     "system_template",
     "images_enabled",
+    "image_fallbacks",
     "pollinations_models",
     "image_shape",
     "image_size",
@@ -73,6 +74,7 @@ class Runtime:
     summary_enabled: bool
     system_template: str
     images_enabled: bool
+    image_fallbacks: bool  # after Cloudflare: Pollinations with a key, then the anonymous Sana
     pollinations_models: list[str]  # with a Pollinations key: tried in order
     image_shape: str  # square | landscape | portrait
     image_size: int  # the long side, px
@@ -171,6 +173,7 @@ _CHECKS: dict[str, Callable[[object], Any]] = {
     "summary_enabled": _flag,
     "system_template": _text,
     "images_enabled": _flag,
+    "image_fallbacks": _flag,
     "pollinations_models": _words,
     "image_shape": _choice(*IMAGE_SHAPES),
     "image_size": _integer(*IMAGE_SIZE_RANGE),

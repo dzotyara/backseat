@@ -14,11 +14,12 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from backseat.bot_config import BotConfig, Runtime
 from backseat.config import CoreSettings
 from backseat.context import ContextBuilder
-from backseat.images import ImageMaker
+from backseat.images import ImageMaker, quota_renews_at
 from backseat.llm import Completion, LLMClient, LLMError
 from backseat.prompts import (
     ADDRESSED_TASK,
@@ -27,6 +28,7 @@ from backseat.prompts import (
     IMAGE_FAILED_REPLY,
     IMAGE_LIMIT_REPLY,
     IMAGE_QUEUE_REPLY,
+    IMAGE_QUOTA_REPLY,
     IMAGE_TASK,
     REACT_OPTION,
     REACTION_EMOJIS,
@@ -238,7 +240,11 @@ class Responder:
         async with self._transport.typing(chat_id):
             picture = await images.draw(drawing.prompt, runtime, on_queue=queued, shape=drawing.shape)
         if picture is None:
-            await self._transport.send(chat_id, IMAGE_FAILED_REPLY, reply_to=reply_to, notify=True)
+            if images.quota_spent():
+                text = IMAGE_QUOTA_REPLY.format(time=quota_renews_at(ZoneInfo(self._settings.timezone)))
+            else:
+                text = IMAGE_FAILED_REPLY
+            await self._transport.send(chat_id, text, reply_to=reply_to, notify=True)
             return True
         sent = await self._transport.send_image(chat_id, picture, drawing.caption, reply_to=reply_to, notify=True)
         if sent is not None:

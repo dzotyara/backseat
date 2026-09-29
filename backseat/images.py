@@ -14,6 +14,8 @@ import time
 import urllib.parse
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -40,6 +42,13 @@ class Drawing:
     prompt: str  # English, for the image model
     caption: str  # posted with the picture
     shape: str | None = None  # square | landscape | portrait when the request says so
+
+
+def quota_renews_at(tz: ZoneInfo, now: datetime | None = None) -> str:
+    """When Cloudflare's daily allocation renews — midnight UTC — on the chat's clock, "03:00"."""
+    now = now or datetime.now(UTC)
+    midnight = (now.astimezone(UTC) + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return f"{midnight.astimezone(tz):%H:%M}"
 
 
 def dimensions(shape: str, size: int) -> tuple[int, int]:
@@ -138,21 +147,22 @@ class ImageMaker:
         self._queued += 1
         try:
             position = self._queued
-            if self._cloudflare or (self._key and runtime.pollinations_models):
+            if self._cloudflare or (runtime.image_fallbacks and self._key and runtime.pollinations_models):
                 wait = (position - 1) * KEYED_SECONDS
             else:
                 wait = max(0.0, self._free_at - self._clock()) + (position - 1) * self._gap
             if on_queue is not None and wait > 3:
                 await on_queue(position, round(wait))
             async with self._lock:
-                shape = shape or runtime.image_shape
+                # Cloudflare's FLUX.1 Schnell takes no size: it draws only the 1024×1024 square, and without
+                # the fallbacks it is the only artist.
+                shape = (shape or runtime.image_shape) if runtime.image_fallbacks else "square"
                 size = dimensions(shape, runtime.image_size)
-                # Cloudflare's FLUX.1 Schnell takes no size: it draws only the 1024×1024 square.
                 image = await self._workers_ai(prompt) if shape == "square" else None
-                if image is None:
+                if image is None and runtime.image_fallbacks:
                     image = await self._keyed(prompt, runtime.pollinations_models, size)
-                if image is None:
-                    image = await self._free(prompt, size)
+                    if image is None:
+                        image = await self._free(prompt, size)
         finally:
             self._queued -= 1
         if image is not None:
@@ -166,6 +176,10 @@ class ImageMaker:
             return None
         await self._bump("paid")
         return image
+
+    def quota_spent(self) -> bool:
+        """Cloudflare's free allocation ran out today (UTC)."""
+        return self._cloudflare_out_on == time.strftime("%Y-%m-%d", time.gmtime())
 
     async def _workers_ai(self, prompt: str) -> bytes | None:
         """Cloudflare Workers AI; None without an account, on any failure, and for the rest of a UTC day

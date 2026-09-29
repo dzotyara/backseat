@@ -1,5 +1,6 @@
 import base64
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -7,7 +8,7 @@ import httpx
 
 from backseat.bot_config import BotConfig, Runtime
 from backseat.context import ContextBuilder
-from backseat.images import ImageMaker, dimensions, parse_drawing
+from backseat.images import ImageMaker, dimensions, parse_drawing, quota_renews_at
 from backseat.llm import LLMClient
 from backseat.render import LineFormatter
 from backseat.responder import Incoming, Responder
@@ -59,6 +60,7 @@ class PaidLLM(FakeLLM):
 
 
 async def runtime(tmp_path: Path, storage: Storage, **changes: object) -> Runtime:
+    changes.setdefault("image_fallbacks", True)  # most tests here are about the fallbacks
     config = BotConfig(storage, make_settings(tmp_path))
     await config.set_runtime(**changes)
     return await config.runtime()
@@ -118,7 +120,7 @@ async def test_per_user_limit(tmp_path: Path, storage: Storage) -> None:
 def make_responder(
     tmp_path: Path, storage: Storage, llm: FakeLLM, transport: FakeTransport, maker: ImageMaker
 ) -> Responder:
-    settings = make_settings(tmp_path, **SLOW)
+    settings = make_settings(tmp_path, image_fallbacks=True, **SLOW)
     formatter = LineFormatter(ZoneInfo(settings.timezone), settings.focus_users)
     config = BotConfig(storage, settings)
     return Responder(
@@ -262,3 +264,35 @@ def test_shape_from_the_plan_and_dimensions() -> None:
     assert parse_drawing('{"draw": true, "prompt": "x", "shape": "круг"}').shape is None  # type: ignore[union-attr]
     assert dimensions("square", 768) == (768, 768)
     assert dimensions("landscape", 1024) == (1024, 576)
+
+
+async def test_cloudflare_only_says_when_the_allocation_renews(tmp_path: Path, storage: Storage) -> None:
+    http, calls = artists(cloudflare=[429], keyed=[], anonymous=[])
+    llm, transport = FakeLLM(PLAN), FakeTransport()
+    maker = ImageMaker(storage, llm, http=http, pollinations_key="sk", cloudflare=("acc", "tok", "@cf/flux"))  # type: ignore[arg-type]
+    settings = make_settings(tmp_path, **SLOW)  # the fallbacks are off by default
+    formatter = LineFormatter(ZoneInfo(settings.timezone), settings.focus_users)
+    config = BotConfig(storage, settings)
+    responder = Responder(
+        transport=transport,
+        storage=storage,
+        llm=llm,  # type: ignore[arg-type]
+        context=ContextBuilder(storage, config, settings, BOT, formatter),
+        settings=settings,
+        bot_config=config,
+        me=BOT,
+        images=maker,
+    )
+    await storage.add_message(msg(5, "ботяра, нарисуй кота в танке горизонтально", user_id=IVAN, author="Иван"))
+    responder.enqueue(CHAT, Incoming(5, IVAN, addressed=True, trivial=False))
+    await responder.process(CHAT)
+    assert calls == ["api.cloudflare.com"]  # no Pollinations, and the shape does not matter
+    [sent] = transport.sent
+    assert sent.text == "Лимит картинок на сегодня закончился — обновится в 03:00."
+    await responder.shutdown()
+
+
+def test_quota_renews_at_midnight_utc_on_the_chat_clock() -> None:
+    evening = datetime(2026, 9, 29, 22, 30, tzinfo=UTC)
+    assert quota_renews_at(ZoneInfo("Europe/Moscow"), evening) == "03:00"
+    assert quota_renews_at(ZoneInfo("UTC"), evening) == "00:00"

@@ -102,6 +102,9 @@ class CoreSettings(BaseSettings):
     images_per_user_per_day: int = 0  # 0 = no limit
     # square | landscape (16:9) | portrait (9:16), unless the request says otherwise; and the long side in px.
     # Cloudflare's FLUX.1 Schnell draws only 1024×1024 squares: other shapes go to Pollinations.
+    # Off: Cloudflare only (free; squares only; when its allocation is spent, the bot says when it renews).
+    # On: then Pollinations with a key, then the anonymous Sana.
+    image_fallbacks: bool = False
     image_shape: str = "square"
     image_size: int = 1024
     paid_images_per_day: int = 0
