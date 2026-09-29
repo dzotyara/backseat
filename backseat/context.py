@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from backseat.bot_config import BotConfig
 from backseat.config import CoreSettings
-from backseat.prompts import DIGEST_TASK, PRECHECK_TASK, SYSTEM_TEMPLATE, participant_lines
+from backseat.prompts import DIGEST_TASK, PRECHECK_TASK, fill_system_template, participant_lines
 from backseat.render import IdMap, LineFormatter
 from backseat.storage import Storage, StoredMessage
 from backseat.triggers import BotIdentity
@@ -45,13 +45,15 @@ class ContextBuilder:
         self.formatter = formatter
 
     async def system_prompt(self) -> str:
-        return SYSTEM_TEMPLATE.format(
-            platform=self._bot_config.platform,
-            names=", ".join(await self._bot_config.names()) or "—",
-            username=self._me.username,
-            participants=participant_lines(self._settings.focus_users),
-            persona=await self._bot_config.persona(),
-        )
+        runtime = await self._bot_config.runtime()  # the service rules may come from the web panel
+        values = {
+            "platform": self._bot_config.platform,
+            "names": ", ".join(await self._bot_config.names()) or "—",
+            "username": self._me.username,
+            "participants": participant_lines(self._settings.focus_users),
+            "persona": await self._bot_config.persona(),
+        }
+        return fill_system_template(runtime.system_template, values)
 
     async def for_reply(self, chat_id: int, new: list[StoredMessage], task: Callable[[IdMap], str]) -> Prompt:
         """`task` gets the numbering so it can point at a message ("#3")."""
@@ -62,7 +64,8 @@ class ContextBuilder:
         shared with the full prompt), the last few lines and the new ones, no memory."""
         first_new = min(message.message_id for message in new)
         candidates = await self._storage.messages_before(chat_id, first_new, _PRECHECK_FETCH)
-        window = self.formatter.newest_within(candidates, self._settings.precheck_context_tokens)
+        budget = (await self._bot_config.runtime()).precheck_context_tokens
+        window = self.formatter.newest_within(candidates, budget)
         sections = [(_RECENT, window)] if window else []
         sections.append((_NEW, new))
         return await self._render(chat_id, sections, lambda ids: PRECHECK_TASK, memory=False)
@@ -87,6 +90,7 @@ class ContextBuilder:
         other = sorted(m.message_id for title, messages in sections if title not in _TIMELINE for m in messages)
         ids = IdMap(timeline + other)
         parts = []
+        memory = memory and (await self._bot_config.runtime()).summary_enabled
         summary = await self._storage.get_summary(chat_id) if memory else None
         if summary:
             parts.append(f"ПАМЯТЬ ЧАТА:\n{summary.text}")
@@ -104,6 +108,7 @@ class ContextBuilder:
         """Ordered for the provider's prompt cache: what stays the same from one batch to the next comes
         first (the system prompt, the summary, the recent window), what changes per batch comes last."""
         settings = self._settings
+        runtime = await self._bot_config.runtime()  # the budgets may come from the web panel
         fmt = self.formatter
         new_ids = {message.message_id for message in new}
         first_new = min(new_ids)
@@ -111,24 +116,26 @@ class ContextBuilder:
         # The window starts where the summary ends, so between folds it only grows at the end and the
         # whole prefix up to it is cached. The summarizer keeps that tail within RECENT_CONTEXT_TOKENS;
         # if it lags behind, fall back to the newest messages that fit.
-        summary = await self._storage.get_summary(chat_id)
+        summary = await self._storage.get_summary(chat_id) if runtime.summary_enabled else None
         candidates = await self._storage.messages_before(chat_id, first_new, _RECENT_FETCH)
         if summary:
             tail = [message for message in candidates if message.message_id > summary.upto_message_id]
-            if sum(fmt.cost(message) for message in tail) <= settings.recent_context_tokens:
+            if sum(fmt.cost(message) for message in tail) <= runtime.recent_context_tokens:
                 candidates = tail
-        window = fmt.newest_within(candidates, settings.recent_context_tokens)
+        window = fmt.newest_within(candidates, runtime.recent_context_tokens)
         window_start = window[0].message_id if window else first_new
         shown = new_ids | {message.message_id for message in window}
 
         sections: list[tuple[str, list[StoredMessage]]] = [(_RECENT, window)] if window else []
         # Older messages of the focus users (always) and of whoever wrote the new messages:
         # the material for "you said the opposite last week".
-        budgets = {user_id: settings.focus_history_tokens for user_id in settings.focus_users}
+        budgets = {user_id: runtime.focus_history_tokens for user_id in settings.focus_users}
         for message in new:
             if not message.is_bot:
-                budgets.setdefault(message.user_id, settings.author_history_tokens)
+                budgets.setdefault(message.user_id, runtime.author_history_tokens)
         for user_id, budget in budgets.items():
+            if budget <= 0:
+                continue  # switched off: no reaching into old messages
             older = await self._storage.user_messages_before(chat_id, user_id, window_start, _HISTORY_FETCH)
             picked = fmt.newest_within(older, budget)
             if picked:

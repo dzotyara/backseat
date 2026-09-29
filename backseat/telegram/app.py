@@ -67,7 +67,7 @@ async def run(settings: TelegramSettings) -> None:
         dispatcher.include_router(create_router(Services(settings, storage, bot_config, llm, responder, me)))
         await register_commands(bot, settings.owner_ids)
         await beat(storage, bot_config)  # the panel sees the bot and its defaults right away
-        await remember_chat_titles(bot, storage, settings.allowed_chat_ids)
+        await remember_chat_titles(bot, storage, (await bot_config.runtime()).allowed_chat_ids)
         # Always scheduled: the web panel's switch is checked at posting time.
         digest = WeeklyDigest(
             storage=storage, llm=llm, context=context, responder=responder, settings=settings, bot_config=bot_config

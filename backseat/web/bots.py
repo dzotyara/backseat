@@ -53,7 +53,8 @@ def _parse_defaults(raw: str | None) -> tuple[str, CoreSettings, str] | None:
         # The bot's settings as far as BotConfig needs them. model_construct: no .env of its own here.
         settings = CoreSettings.model_construct(
             bot_names=names,
-            **{name: check_runtime_value(name, data[name]) for name in SETTINGS_FIELDS},
+            # A bot of an older version publishes fewer fields: the rest keep the built-in defaults.
+            **{name: check_runtime_value(name, data[name]) for name in SETTINGS_FIELDS if name in data},
         )
     except (KeyError, TypeError, ValueError) as exc:
         log.warning("Ignoring unreadable published defaults (%s): %.200s", exc, raw)

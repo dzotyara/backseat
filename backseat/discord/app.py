@@ -25,6 +25,7 @@ from backseat.discord.messages import (
     is_trivial,
     stored_message,
 )
+from backseat.discord.moderation import Moderation
 from backseat.discord.settings import DiscordSettings
 from backseat.discord.transport import DiscordTransport
 from backseat.heartbeat import beat, remember_chat_title, run_heartbeat
@@ -51,6 +52,7 @@ class BackseatClient(discord.Client):
         self.transport = DiscordTransport(self)
         self.bot_config = BotConfig(storage, settings, platform=self.transport.platform)
         self.formatter = LineFormatter(ZoneInfo(settings.timezone), settings.focus_users)
+        self.moderation = Moderation(storage, llm)
         self.summarizer = Summarizer(storage, llm, settings, self.formatter, bot_config=self.bot_config)
         self.services: Services | None = None  # set in setup_hook, once the bot knows who it is
         self._background: set[asyncio.Task[None]] = set()
@@ -113,7 +115,7 @@ class BackseatClient(discord.Client):
 
     async def catch_up(self, me_id: int) -> None:
         """Read each allowed channel's recent history once, then fold whatever is not summarized yet."""
-        for chat_id in self.settings.allowed_chat_ids:
+        for chat_id in (await self.bot_config.runtime()).allowed_chat_ids:
             self._catching_up.add(chat_id)
             try:
                 channel = await self.transport.channel(chat_id)
@@ -137,7 +139,7 @@ class BackseatClient(discord.Client):
         svc = self.services
         if svc is None or message.guild is None:
             return  # not wired yet, or a DM: the bot lives in channels
-        if not channel_allowed(message.channel, self.settings.allowed_chat_ids):
+        if not channel_allowed(message.channel, (await self.bot_config.runtime()).allowed_chat_ids):
             return
         if message.author.id == svc.me.id:
             return  # the bot's own messages are stored when sent
@@ -150,7 +152,23 @@ class BackseatClient(discord.Client):
             return  # remember other bots' messages, never talk to them
         # Every @mention, name call and reply to the bot gets an answer — even a bare sticker reply.
         addressed = find_address(message, svc.me.id, await self.bot_config.name_pattern()) is not None
+        if addressed and await self._moderate(message):
+            return
         svc.responder.enqueue(message.channel.id, Incoming(message.id, user_id, addressed, is_trivial(message)))
+
+    async def _moderate(self, message: discord.Message) -> bool:
+        """A moderator's request about nicks or roles: run it and report. False = answer as usual."""
+        svc = self.services
+        assert svc is not None
+        runtime = await self.bot_config.runtime()
+        if runtime.paused or not Moderation.wants(message, runtime):
+            return False
+        async with self.transport.typing(message.channel.id):
+            report = await self.moderation.handle(message, runtime)
+        if report is None:
+            return False
+        await svc.responder.send(message.channel.id, report, reply_to=message.id, notify=True)
+        return True
 
     async def on_raw_message_edit(self, payload: discord.RawMessageUpdateEvent) -> None:
         # The raw event, unlike on_message_edit, also covers messages missing from discord.py's cache:
@@ -158,7 +176,7 @@ class BackseatClient(discord.Client):
         message = payload.message
         if message.guild is None or message.edited_at is None:
             return  # a DM, or Discord only attached a link preview
-        if not channel_allowed(message.channel, self.settings.allowed_chat_ids):
+        if not channel_allowed(message.channel, (await self.bot_config.runtime()).allowed_chat_ids):
             return
         if text := describe_message(message):
             edited_at = int(message.edited_at.timestamp())

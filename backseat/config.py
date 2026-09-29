@@ -53,6 +53,8 @@ class CoreSettings(BaseSettings):
     # Telegram group ids or Discord channel ids. Empty = any chat.
     # Set it so strangers can't add the bot and spend your credits.
     allowed_chat_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
+    # Discord user ids allowed to rename members and manage roles by asking the bot in the chat.
+    moderator_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
     bot_names: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["бэксит", "ботяра"])
     # "123456789:Иван,987654321:Петя" — fixed display name and a longer personal history.
     focus_users: Annotated[dict[int, str], NoDecode] = Field(default_factory=dict)
@@ -79,6 +81,11 @@ class CoreSettings(BaseSettings):
     author_history_tokens: int = 600
     summary_chunk_tokens: int = 2500
     summary_max_words: int = 600
+    # Off: no summary at all — the bot knows only the recent window (and ЧТО ПИСАЛИ РАНЬШЕ, if its budgets > 0).
+    summary_enabled: bool = True
+    # The service rules before the persona, with {platform} {names} {username} {participants} {persona}.
+    # Empty = the built-in prompts.SYSTEM_TEMPLATE.
+    system_template: str = ""
 
     reactions_enabled: bool = True
     weekly_digest: bool = True
@@ -93,7 +100,7 @@ class CoreSettings(BaseSettings):
     def _parse_str_list(cls, value: Any) -> Any:
         return _split(value)
 
-    @field_validator("owner_ids", "allowed_chat_ids", mode="before")
+    @field_validator("owner_ids", "allowed_chat_ids", "moderator_ids", mode="before")
     @classmethod
     def _parse_int_list(cls, value: Any) -> Any:
         value = _split(value)

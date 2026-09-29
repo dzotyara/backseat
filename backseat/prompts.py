@@ -1,5 +1,6 @@
 """Service prompts. The persona (character) is separate: prompts/persona.md or /prompt."""
 
+import re
 from collections.abc import Mapping
 
 # Reactions the bot may use instead of a text reply: Telegram accepts only its standard set, Discord any emoji.
@@ -42,15 +43,35 @@ SYSTEM_TEMPLATE = """\
 PARTICIPANT_LINE = "- Постоянный участник: {name} — id {user_id}. В строках он всегда подписан «{name}».\n"
 
 
+SYSTEM_PLACEHOLDERS = ("platform", "names", "username", "participants", "persona")
+_PLACEHOLDER_RE = re.compile(r"\{(" + "|".join(SYSTEM_PLACEHOLDERS) + r")\}")
+
+
+def fill_system_template(template: str, values: Mapping[str, str]) -> str:
+    """SYSTEM_TEMPLATE or the owner's version of it from the web panel. Only the known placeholders
+    are filled: any other brace in the owner's text stays as typed instead of breaking str.format."""
+    return _PLACEHOLDER_RE.sub(lambda match: values[match.group(1)], template)
+
+
 def participant_lines(focus_users: Mapping[int, str]) -> str:
     """A PARTICIPANT_LINE for each of FOCUS_USERS, for the chat and the summary system prompts."""
     return "".join(PARTICIPANT_LINE.format(name=name, user_id=user_id) for user_id, name in focus_users.items())
 
 
-ADDRESSED_TASK = """\
+# How long an answer is: like a person in a chat, not like an assistant.
+LENGTH_RULE = """\
+Длина — как у живого человека в чате: обычно одна-две короткие фразы, иногда одно слово или пара слов. \
+Развёрнуто — только если спросили что-то по делу и коротко не ответить. Не пиши абзацами, не повторяй вопрос, \
+не заканчивай предложением помочь ещё."""
+
+ADDRESSED_TASK = (
+    """\
 К тебе обратились в сообщении #{message_id} (автор — {author}). Ответь на него.
 Напиши только текст своего ответа — без номера, времени, имени и кавычек. \
-Отвечай по существу: шутка допустима, но не вместо ответа."""
+Отвечай по существу: шутка допустима, но не вместо ответа.
+"""
+    + LENGTH_RULE
+)
 
 UNPROMPTED_TASK = """\
 Тебя не звали. Посмотри на НОВОЕ и реши по своему характеру, стоит ли вмешаться.
@@ -60,7 +81,8 @@ SKIP
 REPLY #<номер сообщения из НОВОГО>
 <текст твоего сообщения>
 {react_option}\
-Не больше одного действия на всё НОВОЕ. Если сомневаешься — SKIP."""
+Не больше одного действия на всё НОВОЕ. Если сомневаешься — SKIP. Реплика — короткая, как у человека в чате: \
+обычно одна фраза."""
 
 # The cheap first look before an unprompted comment (PRECHECK_CONTEXT_TOKENS): a few recent lines, one word
 # back. Only "ДА" pays for the full prompt with the chat's memory, where UNPROMPTED_TASK decides for real.

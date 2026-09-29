@@ -5,8 +5,17 @@ from pathlib import Path
 
 import pytest
 
-from backseat.bot_config import DEFAULTS_KEY, GLOBAL, RUNTIME_KEY, BotConfig, Runtime, check_runtime_value
+from backseat.bot_config import (
+    DEFAULTS_KEY,
+    GLOBAL,
+    RUNTIME_KEY,
+    SETTINGS_FIELDS,
+    BotConfig,
+    Runtime,
+    check_runtime_value,
+)
 from backseat.config import CoreSettings
+from backseat.prompts import SYSTEM_TEMPLATE
 from backseat.storage import Storage
 
 MODELS = ["paid/model", "free/model:free"]
@@ -48,12 +57,24 @@ async def stored_overrides(storage: Storage) -> object:
 
 
 async def test_runtime_defaults_come_from_settings(config: BotConfig) -> None:
+    settings = CoreSettings.model_construct()  # the built-in defaults
     assert await config.runtime() == Runtime(
         paused=False,
+        allowed_chat_ids=[],
+        moderator_ids=[],
         models=MODELS,
+        providers=[],
+        max_tokens=settings.max_tokens,
         unprompted_cooldown_seconds=60.0,
+        reply_freeze_seconds=settings.reply_freeze_seconds,
+        precheck_context_tokens=0,
         reactions_enabled=True,
         weekly_digest=True,
+        recent_context_tokens=settings.recent_context_tokens,
+        author_history_tokens=settings.author_history_tokens,
+        focus_history_tokens=settings.focus_history_tokens,
+        summary_enabled=True,
+        system_template=SYSTEM_TEMPLATE,  # empty SYSTEM_TEMPLATE setting = the built-in rules
     )
 
 
@@ -139,15 +160,11 @@ async def test_publish_defaults_writes_the_defaults_not_the_overrides(tmp_path: 
     await config.set_names(["железяка"])
     await config.set_runtime(paused=True, models=["x/y"])
     await config.publish_defaults()
-    assert json.loads(await storage.get_meta(DEFAULTS_KEY) or "") == {
-        "platform": "Discord",
-        "names": ["бот"],
-        "persona": "Ты — тестовый бот.",
-        "models": MODELS,
-        "unprompted_cooldown_seconds": 60.0,
-        "reactions_enabled": True,
-        "weekly_digest": False,
-    }
+    published = json.loads(await storage.get_meta(DEFAULTS_KEY) or "")
+    assert published["platform"] == "Discord" and published["names"] == ["бот"]
+    assert published["persona"] == "Ты — тестовый бот."
+    assert (published["models"], published["weekly_digest"]) == (MODELS, False)  # the defaults, not x/y
+    assert set(SETTINGS_FIELDS) <= set(published)
 
 
 async def test_publish_defaults_picks_up_an_edited_persona_file(tmp_path: Path, storage: Storage) -> None:

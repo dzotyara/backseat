@@ -69,16 +69,20 @@ class LLMClient:
         max_tokens: int | None = None,
         temperature: float | None = None,
         models: list[str] | None = None,
+        providers: list[str] | None = None,
     ) -> Completion:
         """Walk `models` (by default the configured ones) in order until one answers."""
         models = self.models if models is None else models
+        providers = self._providers if providers is None else providers
         now = self._clock()
         # If every model is cooling down, try them all anyway rather than go silent.
         candidates = [m for m in models if self._skip_until.get(m, 0.0) <= now] or models
         failures = []
         for model in candidates:
             try:
-                completion = await self._request(model, messages, max_tokens or self._max_tokens, temperature)
+                completion = await self._request(
+                    model, messages, max_tokens or self._max_tokens, temperature, providers
+                )
             except _ModelFailed as exc:
                 log.warning("Model %s failed: %s", model, exc)
                 failures.append(f"{model}: {exc}")
@@ -95,6 +99,7 @@ class LLMClient:
         messages: list[dict[str, str]],
         max_tokens: int,
         temperature: float | None,
+        providers: list[str],
     ) -> Completion:
         payload: dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens}
         if temperature is not None:
@@ -103,9 +108,9 @@ class LLMClient:
             payload["reasoning"] = {"enabled": False}
         else:
             payload["reasoning"] = {"effort": self._reasoning, "exclude": True}
-        if self._providers:
+        if providers:
             # Hosts that don't serve the model are skipped; if all listed ones fail, OpenRouter picks.
-            payload["provider"] = {"order": self._providers, "allow_fallbacks": True}
+            payload["provider"] = {"order": providers, "allow_fallbacks": True}
 
         try:
             response = await self._http.post(f"{self._base_url}/chat/completions", json=payload, headers=self._headers)

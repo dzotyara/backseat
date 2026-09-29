@@ -102,8 +102,8 @@ def create_router(svc: Services) -> Router:
     router = Router(name="backseat")
     tz = ZoneInfo(svc.settings.timezone)
 
-    def chat_allowed(message: Message) -> bool:
-        allowed = svc.settings.allowed_chat_ids
+    async def chat_allowed(message: Message) -> bool:
+        allowed = (await svc.bot_config.runtime()).allowed_chat_ids  # the web panel may change them
         return message.chat.type == ChatType.PRIVATE or not allowed or message.chat.id in allowed
 
     def is_owner(message: Message) -> bool:
@@ -150,7 +150,7 @@ def create_router(svc: Services) -> Router:
             return  # for everyone else the command does not exist
         if message.chat.type == ChatType.PRIVATE:
             # From the private chat, report on the group chats the bot lives in.
-            chat_ids = svc.settings.allowed_chat_ids or await svc.storage.active_chats(0)
+            chat_ids = (await svc.bot_config.runtime()).allowed_chat_ids or await svc.storage.active_chats(0)
             chats = [(chat_id, f"Память чата {await chat_title(bot, chat_id)}") for chat_id in chat_ids]
         else:
             chats = [(message.chat.id, "Память этого чата")]
@@ -194,7 +194,7 @@ def create_router(svc: Services) -> Router:
 
     @router.message(Command("names", "имена", ignore_case=True))
     async def cmd_names(message: Message, command: CommandObject) -> None:
-        if not chat_allowed(message):
+        if not await chat_allowed(message):
             return
         arg = (command.args or "").strip()
         if not arg:
@@ -218,7 +218,7 @@ def create_router(svc: Services) -> Router:
 
     @router.message(_GROUPS)
     async def on_group_message(message: Message) -> None:
-        if not chat_allowed(message):
+        if not await chat_allowed(message):
             return
         text = describe_message(message)
         if not text:
@@ -244,7 +244,7 @@ def create_router(svc: Services) -> Router:
 
     @router.edited_message(_GROUPS)
     async def on_group_edit(message: Message) -> None:
-        if not chat_allowed(message):
+        if not await chat_allowed(message):
             return
         text = describe_message(message)
         if text:

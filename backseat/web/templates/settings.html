@@ -1,63 +1,58 @@
 {% extends "bot.html" %}
 {% import "_macros.html" as ui %}
-{% block title %}Поведение · {{ state.slot.title }}{% endblock %}
+{% block title %}Настройки · {{ state.slot.title }}{% endblock %}
 {% block page %}
 {#- Reset buttons belong to the separate form "reset", so Enter in a field always means "Сохранить". #}
-<form method="post" action="/bots/{{ state.slot.slug }}/settings" class="card stack">
-  <div class="card-head"><h2>Имена и поведение</h2></div>
+<form method="post" action="/bots/{{ state.slot.slug }}/settings" class="stack">
   {% if form.errors %}<p class="note note-error" role="alert">Не сохранено: исправьте отмеченные поля.</p>{% endif %}
 
-  <div class="field{% if form.errors.names %} invalid{% endif %}">
-    <div class="field-head"><label for="names">Имена</label>{{ ui.override("names", overridden) }}</div>
-    <input id="names" name="names" value="{{ form.names_text }}" autocomplete="off"
-      {%- if form.errors.names %} aria-invalid="true" aria-describedby="names-error"{% endif %}>
-    {% if form.errors.names %}<p class="field-error" id="names-error">{{ form.errors.names }}</p>{% endif %}
-    <p class="hint">Через запятую. На эти имена бот откликается как на обращение — как и на @упоминание или ответ
-      на своё сообщение. По умолчанию: {{ default_names|join(", ") or "—" }}.</p>
-  </div>
-
-  <div class="field{% if form.errors.models %} invalid{% endif %}">
-    <div class="field-head"><label for="models">Модели</label>{{ ui.override("models", overridden) }}</div>
-    <textarea id="models" name="models" class="mono" rows="4" spellcheck="false"
-      {%- if form.errors.models %} aria-invalid="true" aria-describedby="models-error"{% endif %}>{{ form.models_text }}</textarea>
-    {% if form.errors.models %}<p class="field-error" id="models-error">{{ form.errors.models }}</p>{% endif %}
-    <p class="hint">По одной в строке, в порядке очереди: отвечает первая, которая смогла, остальные — запасные.
-      Названия — как на openrouter.ai/models. По умолчанию: {{ defaults.models|join(", ") }}.</p>
-  </div>
-
-  <div class="field{% if form.errors.unprompted_cooldown_seconds %} invalid{% endif %}">
-    <div class="field-head">
-      <label for="cooldown">Пауза между комментариями, секунд</label>{{ ui.override("unprompted_cooldown_seconds", overridden) }}
+  <section class="card stack">
+    <div class="card-head"><h2>Имена</h2></div>
+    <div class="field{% if form.errors.names %} invalid{% endif %}">
+      <div class="field-head"><label for="names">Имена</label>{{ ui.override("names", overridden) }}</div>
+      <input id="names" name="names" value="{{ form.names_text }}" autocomplete="off"
+        {%- if form.errors.names %} aria-invalid="true" aria-describedby="names-error"{% endif %}>
+      {% if form.errors.names %}<p class="field-error" id="names-error">{{ form.errors.names }}</p>{% endif %}
+      <p class="hint">Через запятую. На эти имена бот откликается как на обращение — как и на @упоминание или ответ
+        на своё сообщение. По умолчанию: {{ default_names|join(", ") or "—" }}.</p>
     </div>
-    <input id="cooldown" name="unprompted_cooldown_seconds" type="number" min="0" step="any" inputmode="decimal"
-      class="short" value="{{ form.cooldown_text }}"
-      {%- if form.errors.unprompted_cooldown_seconds %} aria-invalid="true" aria-describedby="cooldown-error"{% endif %}>
-    {% if form.errors.unprompted_cooldown_seconds %}
-    <p class="field-error" id="cooldown-error">{{ form.errors.unprompted_cooldown_seconds }}</p>
-    {% endif %}
-    <p class="hint">Сколько бот выжидает после своего сообщения, прежде чем снова влезть в разговор без спроса.
-      На обращения отвечает всегда. По умолчанию: {{ defaults.unprompted_cooldown_seconds|seconds }}.</p>
-  </div>
+  </section>
 
-  <div class="field">
-    <div class="field-head">
-      <label class="check"><input type="checkbox" name="reactions_enabled" value="1"
-        {%- if form.reactions_enabled %} checked{% endif %}> Реакции эмодзи</label>
-      {{ ui.override("reactions_enabled", overridden) }}
+  {% for group, specs in form.grouped() if specs %}
+  <section class="card stack">
+    <div class="card-head"><h2>{{ group }}</h2></div>
+    {% for spec in specs %}
+    {% set error = form.errors.get(spec.name) %}
+    <div class="field{% if error %} invalid{% endif %}">
+      <div class="field-head">
+        {% if spec.kind == "flag" %}
+        <label class="check"><input type="hidden" name="{{ spec.name }}" value="0"><input type="checkbox"
+          name="{{ spec.name }}" value="1"{% if form.flags.get(spec.name) %} checked{% endif %}> {{ spec.label }}</label>
+        {% else %}
+        <label for="f-{{ spec.name }}">{{ spec.label }}</label>
+        {% endif %}
+        {{ ui.override(spec.name, overridden) }}
+      </div>
+      {% if spec.kind in ("models", "text") %}
+      <textarea id="f-{{ spec.name }}" name="{{ spec.name }}" class="mono" spellcheck="false"
+        rows="{{ 18 if spec.kind == 'text' else 4 }}"
+        {%- if error %} aria-invalid="true" aria-describedby="e-{{ spec.name }}"{% endif %}>{{ form.texts.get(spec.name, "") }}</textarea>
+      {% elif spec.kind in ("seconds", "integer") %}
+      <input id="f-{{ spec.name }}" name="{{ spec.name }}" inputmode="decimal" class="short" autocomplete="off"
+        value="{{ form.texts.get(spec.name, '') }}"
+        {%- if error %} aria-invalid="true" aria-describedby="e-{{ spec.name }}"{% endif %}>
+      {% elif spec.kind != "flag" %}
+      <input id="f-{{ spec.name }}" name="{{ spec.name }}" class="mono" autocomplete="off"
+        value="{{ form.texts.get(spec.name, '') }}"
+        {%- if error %} aria-invalid="true" aria-describedby="e-{{ spec.name }}"{% endif %}>
+      {% endif %}
+      {% if error %}<p class="field-error" id="e-{{ spec.name }}">{{ error }}</p>{% endif %}
+      <p class="hint">{{ spec.hint }}
+        {%- if spec.kind != "text" %} По умолчанию: {{ shown_defaults[spec.name] }}.{% endif %}</p>
     </div>
-    <p class="hint">Иногда вместо комментария бот просто ставит реакцию на сообщение.
-      По умолчанию: {{ "включены" if defaults.reactions_enabled else "выключены" }}.</p>
-  </div>
-
-  <div class="field">
-    <div class="field-head">
-      <label class="check"><input type="checkbox" name="weekly_digest" value="1"
-        {%- if form.weekly_digest %} checked{% endif %}> Итоги недели</label>
-      {{ ui.override("weekly_digest", overridden) }}
-    </div>
-    <p class="hint">Раз в неделю бот публикует в активных чатах пост «Итоги недели».
-      По умолчанию: {{ "включены" if defaults.weekly_digest else "выключены" }}.</p>
-  </div>
+    {% endfor %}
+  </section>
+  {% endfor %}
 
   <div class="actions">
     <span class="spacer"></span>

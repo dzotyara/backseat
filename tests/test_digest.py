@@ -117,7 +117,7 @@ async def test_compose_cleans_the_post_and_lets_model_failures_through(tmp_path:
     digest = make_digest(settings, storage, llm, FakeTransport())
 
     assert await digest.compose(CHAT, WEEK_AGO) == "Итоги недели\n— шашлыки"
-    assert llm.options[0] == {"max_tokens": 1500, "models": ["paid/model", "free/model:free"]}  # the .env order
+    assert llm.options[0] == {"max_tokens": 1500, "models": ["paid/model", "free/model:free"], "providers": []}
     assert await digest.compose(CHAT, WEEK_AGO) is None  # nothing left to post
     with pytest.raises(LLMError):
         await digest.compose(CHAT, WEEK_AGO)

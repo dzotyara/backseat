@@ -51,12 +51,15 @@ class Summarizer:
 
     async def update_once(self, chat_id: int) -> bool:
         """Fold the oldest unsummarized chunk into the summary; False if there is nothing to fold yet."""
+        runtime = await self._bot_config.runtime()
+        if not runtime.summary_enabled:
+            return False  # switched off in the panel or .env: the bot keeps only the recent window
         summary = await self._storage.get_summary(chat_id)
         tail = await self._storage.messages_after(chat_id, summary.upto_message_id if summary else 0, _TAIL_FETCH)
         costs = [self._formatter.cost(message) for message in tail]
         # Fold as soon as something falls out of the verbatim window, so every message is always
         # either quoted or summarized. Folding the oldest chunk may overlap the window — harmless.
-        if sum(costs) <= self._settings.recent_context_tokens:
+        if sum(costs) <= runtime.recent_context_tokens:
             return False
 
         chunk = self._oldest_chunk(tail, costs)
@@ -64,7 +67,8 @@ class Summarizer:
             self._prompt(summary, chunk),
             max_tokens=self._settings.summary_max_words * _TOKENS_PER_WORD,
             temperature=0.2,
-            models=(await self._bot_config.runtime()).models,
+            models=runtime.models,
+            providers=runtime.providers,
         )
         text = completion.text.strip()
         if completion.finish_reason == "length":

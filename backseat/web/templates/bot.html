@@ -11,7 +11,7 @@
 {{ ui.warnings(state) }}
 <nav class="tabs" aria-label="{{ state.slot.title }}">
   <a href="/bots/{{ state.slot.slug }}/persona"{% if tab == "persona" %} aria-current="page"{% endif %}>Характер</a>
-  <a href="/bots/{{ state.slot.slug }}/settings"{% if tab == "settings" %} aria-current="page"{% endif %}>Поведение</a>
+  <a href="/bots/{{ state.slot.slug }}/settings"{% if tab == "settings" %} aria-current="page"{% endif %}>Настройки</a>
   <a href="/bots/{{ state.slot.slug }}/memory"{% if tab == "memory" %} aria-current="page"{% endif %}>Память</a>
 </nav>
 {% block page %}{% endblock %}

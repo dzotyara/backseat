@@ -89,13 +89,17 @@ def test_behaviour_is_saved_as_overrides_only(panel: Panel) -> None:
     panel.telegram.setup()
     page = panel.client.get("/bots/telegram/settings").text
     assert 'value="бэксит, ботяра"' in page and "\n".join(BOT_MODELS) in page
-    assert page.count('class="chip chip-muted">по умолчанию') == 5
+    defaults_shown = page.count('class="chip chip-muted">по умолчанию')
+    assert defaults_shown == 15  # names + 14 settings (no moderators: that is Discord's)
 
     form = {
         "names": "Железяка; бот,, бот",
         "models": "vendor/new-model\npaid/model, vendor/new-model",
         "unprompted_cooldown_seconds": "90,5",
-        "weekly_digest": "1",  # reactions_enabled is unchecked: browsers don't send it
+        "weekly_digest": ["0", "1"],  # every checkbox comes with a hidden "0"
+        "reactions_enabled": "0",  # unchecked: only the hidden "0"
+        "max_tokens": "300",
+        "allowed_chat_ids": "-100123, 456\n-100123",
     }
     page = panel.client.post("/bots/telegram/settings", data=form).text
     assert "Сохранено." in page
@@ -104,12 +108,15 @@ def test_behaviour_is_saved_as_overrides_only(panel: Panel) -> None:
     assert runtime.unprompted_cooldown_seconds == 90.5
     assert (runtime.reactions_enabled, runtime.weekly_digest, runtime.paused) == (False, True, False)
     assert json.loads(panel.telegram.setting("names") or "") == ["Железяка", "бот"]
+    assert runtime.max_tokens == 300 and runtime.allowed_chat_ids == [-100123, 456]
     assert json.loads(panel.telegram.setting("runtime") or "") == {
         "models": ["vendor/new-model", "paid/model"],
         "unprompted_cooldown_seconds": 90.5,
         "reactions_enabled": False,
-    }  # weekly_digest equals the default: not an override
-    assert page.count('class="chip chip-accent">изменено') == 4
+        "max_tokens": 300,
+        "allowed_chat_ids": [-100123, 456],
+    }  # weekly_digest equals the default, and fields not sent stay as they are
+    assert page.count('class="chip chip-accent">изменено') == 6
 
 
 @pytest.mark.parametrize(
@@ -121,6 +128,9 @@ def test_behaviour_is_saved_as_overrides_only(panel: Panel) -> None:
         ("unprompted_cooldown_seconds", "-5", "Пауза не может быть отрицательной."),
         ("unprompted_cooldown_seconds", "минута", "Нужно число секунд, например 60."),
         ("unprompted_cooldown_seconds", "inf", "Нужно обычное число секунд"),
+        ("max_tokens", "5", "Нужно целое число от 16 до 16"),
+        ("allowed_chat_ids", "123, чат", "«чат» — не ID"),
+        ("system_template", " \r\n ", "Текст не может быть пустым."),
     ],
 )
 def test_behaviour_validation(panel: Panel, field: str, value: str, error: str) -> None:
@@ -143,7 +153,7 @@ def test_behaviour_reset_one_field_or_everything(panel: Panel) -> None:
     assert runtime.models == BOT_MODELS and runtime.reactions_enabled is False
 
     page = panel.client.post("/bots/telegram/settings/reset", data={"field": "all"}).text
-    assert "Имена и поведение — снова по умолчанию." in page
+    assert "Все настройки — снова по умолчанию." in page
     runtime = panel.telegram.runtime()
     assert runtime.reactions_enabled is True
     assert runtime.paused is True  # the pause belongs to the switch, not to this form

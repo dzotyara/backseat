@@ -10,7 +10,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Self
 
 from backseat.config import CoreSettings
-from backseat.prompts import FALLBACK_PERSONA
+from backseat.prompts import FALLBACK_PERSONA, SYSTEM_TEMPLATE
 from backseat.storage import Storage
 from backseat.triggers import compile_names
 
@@ -24,8 +24,24 @@ RUNTIME_KEY = "runtime"  # JSON with only the overridden Runtime fields
 # meta key with what the bot uses when nothing is overridden, for the web panel in another process.
 DEFAULTS_KEY = "defaults"
 # The Runtime fields that default to the same-named .env settings: all but the pause. The bot publishes
-# their defaults for the web panel, and the panel's behaviour form edits them.
-SETTINGS_FIELDS = ("models", "unprompted_cooldown_seconds", "reactions_enabled", "weekly_digest")
+# their defaults for the web panel, and the panel's settings page edits them.
+SETTINGS_FIELDS = (
+    "allowed_chat_ids",
+    "moderator_ids",
+    "models",
+    "providers",
+    "max_tokens",
+    "unprompted_cooldown_seconds",
+    "reply_freeze_seconds",
+    "precheck_context_tokens",
+    "reactions_enabled",
+    "weekly_digest",
+    "recent_context_tokens",
+    "author_history_tokens",
+    "focus_history_tokens",
+    "summary_enabled",
+    "system_template",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,20 +50,27 @@ class Runtime:
     remembering the chat but writes nothing: no replies, no reactions, no digest."""
 
     paused: bool
+    allowed_chat_ids: list[int]  # empty = every chat
+    moderator_ids: list[int]  # may rename members and manage roles by asking the bot (Discord)
     models: list[str]
+    providers: list[str]
+    max_tokens: int  # per answer or comment
     unprompted_cooldown_seconds: float
+    reply_freeze_seconds: float
+    precheck_context_tokens: int
     reactions_enabled: bool
     weekly_digest: bool
+    recent_context_tokens: int
+    author_history_tokens: int
+    focus_history_tokens: int
+    summary_enabled: bool
+    system_template: str
 
     @classmethod
     def from_settings(cls, settings: CoreSettings) -> Self:
-        return cls(
-            paused=False,
-            models=list(settings.models),
-            unprompted_cooldown_seconds=settings.unprompted_cooldown_seconds,
-            reactions_enabled=settings.reactions_enabled,
-            weekly_digest=settings.weekly_digest,
-        )
+        values = {name: getattr(settings, name) for name in SETTINGS_FIELDS}
+        values["system_template"] = values["system_template"] or SYSTEM_TEMPLATE
+        return cls(paused=False, **{name: list(v) if isinstance(v, list) else v for name, v in values.items()})
 
 
 def parse_names(text: str) -> list[str]:
@@ -61,13 +84,23 @@ def _flag(value: object) -> bool:
     return value
 
 
-def _models(value: object) -> list[str]:
+def _words(value: object) -> list[str]:
     if not isinstance(value, list | tuple) or not all(isinstance(item, str) for item in value):
-        raise ValueError("expected a list of model ids")
-    models = list(dict.fromkeys(item.strip() for item in value if item.strip()))
+        raise ValueError("expected a list of strings")
+    return list(dict.fromkeys(item.strip() for item in value if item.strip()))
+
+
+def _models(value: object) -> list[str]:
+    models = _words(value)
     if not models:
         raise ValueError("at least one model is required")
     return models
+
+
+def _ids(value: object) -> list[int]:
+    if not isinstance(value, list | tuple) or not all(isinstance(i, int) and not isinstance(i, bool) for i in value):
+        raise ValueError("expected a list of ids")
+    return list(dict.fromkeys(value))
 
 
 def _seconds(value: object) -> float:
@@ -76,12 +109,41 @@ def _seconds(value: object) -> float:
     return float(value)
 
 
+def _integer(low: int, high: int) -> Callable[[object], int]:
+    def check(value: object) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+            raise ValueError(f"expected a whole number from {low} to {high}")
+        return value
+
+    return check
+
+
+def _text(value: object) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("expected non-empty text")
+    return value.strip()
+
+
+MAX_TOKENS_RANGE = (16, 16_000)
+BUDGET_RANGE = (0, 200_000)
+
 _CHECKS: dict[str, Callable[[object], Any]] = {
     "paused": _flag,
+    "allowed_chat_ids": _ids,
+    "moderator_ids": _ids,
     "models": _models,
+    "providers": _words,
+    "max_tokens": _integer(*MAX_TOKENS_RANGE),
     "unprompted_cooldown_seconds": _seconds,
+    "reply_freeze_seconds": _seconds,
+    "precheck_context_tokens": _integer(*BUDGET_RANGE),
     "reactions_enabled": _flag,
     "weekly_digest": _flag,
+    "recent_context_tokens": _integer(*BUDGET_RANGE),
+    "author_history_tokens": _integer(*BUDGET_RANGE),
+    "focus_history_tokens": _integer(*BUDGET_RANGE),
+    "summary_enabled": _flag,
+    "system_template": _text,
 }
 
 

@@ -151,7 +151,9 @@ class Responder:
         await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _complete(self, messages: list[dict[str, str]], runtime: Runtime, **options: Any) -> Completion:
-        return await self._llm.complete(messages, models=runtime.models, **options)  # the panel's model order
+        # The panel's model order, hosts and answer length.
+        options.setdefault("max_tokens", runtime.max_tokens)
+        return await self._llm.complete(messages, models=runtime.models, providers=runtime.providers, **options)
 
     # --- addressed: always answer ---
 
@@ -188,11 +190,11 @@ class Responder:
             if not text:
                 text = random.choice(FALLBACK_REPLIES)
             await self.send(chat_id, text, reply_to=target_id, notify=True)
-            self._freeze(state, target.user_id)
+            self._freeze(state, target.user_id, runtime)
             log.info("chat=%s answered message=%s", chat_id, target_id)
 
-    def _freeze(self, state: _ChatState, user_id: int) -> None:
-        state.frozen_until[user_id] = self._clock() + self._settings.reply_freeze_seconds
+    def _freeze(self, state: _ChatState, user_id: int, runtime: Runtime) -> None:
+        state.frozen_until[user_id] = self._clock() + runtime.reply_freeze_seconds
         state.told_frozen.discard(user_id)
 
     async def _tell_frozen(self, chat_id: int, target: StoredMessage, left: float) -> None:
@@ -220,7 +222,7 @@ class Responder:
         messages = await self._storage.get_messages(chat_id, [item.message_id for item in batch])
         if not any(not message.is_bot for message in messages):
             return
-        if self._settings.precheck_context_tokens > 0 and not await self._worth_a_look(chat_id, messages, runtime):
+        if runtime.precheck_context_tokens > 0 and not await self._worth_a_look(chat_id, messages, runtime):
             return
         task, emojis = _unprompted_task(runtime.reactions_enabled)
         prompt = await self._context.for_reply(chat_id, messages, lambda ids: task)
@@ -235,7 +237,7 @@ class Responder:
         if action.kind == "reply" and target is not None:
             await self.send(chat_id, action.text, reply_to=target)
             author = next(message.user_id for message in messages if message.message_id == target)
-            self._freeze(state, author)
+            self._freeze(state, author, runtime)
         elif action.kind == "react" and target is not None:
             await self._transport.react(chat_id, target, action.emoji)
         log.info("chat=%s unprompted=%s target=%s model=%s", chat_id, action.kind, target, completion.model)

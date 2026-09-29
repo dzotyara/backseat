@@ -15,7 +15,7 @@
   <img alt="LLM via OpenRouter" src="https://img.shields.io/badge/LLM-OpenRouter-6E56CF">
   <img alt="Memory in SQLite" src="https://img.shields.io/badge/memory-SQLite-003B57?logo=sqlite&logoColor=white">
   <img alt="Docker Compose" src="https://img.shields.io/badge/deploy-Docker%20Compose-2496ED?logo=docker&logoColor=white">
-  <img alt="233 tests" src="https://img.shields.io/badge/tests-233%20passed-2EA043">
+  <img alt="249 tests" src="https://img.shields.io/badge/tests-249%20passed-2EA043">
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-F2C94C"></a>
 </p>
 
@@ -40,7 +40,11 @@
   за последние `BACKFILL_DAYS` дней и свернуть её в память. Три месяца оживлённого канала — это
   десятки тысяч сообщений и заметные деньги (порядка доллара), поэтому `0` — не загружать.
   Telegram ботам историю не отдаёт, там память копится с момента запуска.
-- 🎛️ **Веб-панель:** характер ботов, пауза, имена, модели, поведение, память и расходы — без перезапуска.
+- 🎛️ **Веб-панель:** характер и служебные правила, пауза, имена, каналы, модели и хостинги, длина ответа,
+  паузы, объём памяти, сводка, модераторы, память и расходы — всё без перезапуска.
+- 🛡️ **Discord: ники и роли по просьбе.** Модератор пишет боту обычным текстом — «ботяра, поменяй Ивокси
+  ник на Антон, роль Морпех, цвет хаки», — и бот меняет ник, создаёт или перекрашивает роль и выдаёт её.
+  Кто модератор — задаётся в панели; просьбы остальных бот не выполняет.
 - 🔀 **Любые модели:** работает на LLM через OpenRouter, можно целиком на бесплатных. Если модель
   недоступна или кончились деньги, бот сам переходит к следующей в списке.
 
@@ -184,7 +188,7 @@ python -m venv .venv
 .venv/Scripts/ruff check backseat tests
 ```
 
-237 тестов не ходят в сеть: Telegram, Discord и нейросеть подменены. Путь от входящего апдейта
+249 тестов не ходят в сеть: Telegram, Discord и нейросеть подменены. Путь от входящего апдейта
 до ответа проверяется через настоящий диспетчер aiogram, а панель — через тестовый клиент FastAPI.
 
 ```text

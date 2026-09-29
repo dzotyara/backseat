@@ -71,8 +71,10 @@ class WeeklyDigest:
         """The digest post for one chat, or None if the model wrote nothing usable.
         LLMError propagates: the caller decides whether to retry."""
         prompt = await self._context.for_digest(chat_id, since_ts)
-        models = (await self._bot_config.runtime()).models
-        completion = await self._llm.complete(prompt.messages, max_tokens=1500, models=models)
+        runtime = await self._bot_config.runtime()
+        completion = await self._llm.complete(
+            prompt.messages, max_tokens=1500, models=runtime.models, providers=runtime.providers
+        )
         return clean_reply(completion.text) or None
 
     async def post_all(self, run_at: datetime) -> None:
@@ -84,7 +86,7 @@ class WeeklyDigest:
         since = int((run_at - timedelta(days=7)).timestamp())
         week = f"{run_at:%G-W%V}"
         for chat_id in await self._storage.active_chats(since):
-            if settings.allowed_chat_ids and chat_id not in settings.allowed_chat_ids:
+            if runtime.allowed_chat_ids and chat_id not in runtime.allowed_chat_ids:
                 continue
             key = f"digest:{chat_id}:{week}"
             if await self._storage.get_meta(key):

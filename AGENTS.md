@@ -65,13 +65,20 @@ pydantic-settings. User-facing docs are in README.md (Russian).
    hidden reasoning by default (`REASONING=off`). `PROVIDERS` is sent as OpenRouter's provider order
    with fallbacks: left alone, OpenRouter served the default model from hosts 6-8x pricier than the cheapest.
    Each call logs its model, tokens, cost, provider and cached tokens.
+7. Discord moderation (`discord/moderation.py`): an addressed message from `MODERATOR_IDS` that mentions
+   nicks, roles or colours is parsed by the model into JSON actions (nick, give/take/create role,
+   colour); the code resolves members by id from the recent chat authors and runs them. Nothing
+   parseable = the usual answer.
 
 ## Web panel contract
 
 - The bots and the panel share each bot's SQLite file (WAL; keep transactions short).
 - Bot-wide settings live in `chat_settings` with chat_id 0 (`bot_config.GLOBAL`): `persona`, `names`,
-  and `runtime` — JSON overrides of `Runtime` (paused, models, unprompted cooldown, reactions,
-  weekly digest). `.env` values are the defaults; `BotConfig.runtime()` merges them.
+  and `runtime` — JSON overrides of `Runtime`: the pause and every field of `SETTINGS_FIELDS` (chats,
+  moderators, models, hosts, max tokens, pauses, budgets, summary switch, service rules). `.env` values
+  are the defaults; `BotConfig.runtime()` merges them. Read settings through the runtime, not
+  `CoreSettings`, wherever the panel may change them. The panel form is generated from
+  `web/forms.SPECS`: a new Runtime field needs a check in `bot_config._CHECKS` and a spec there.
 - Every minute each bot writes meta `heartbeat` and republishes its defaults (`heartbeat.py`,
   `BotConfig.publish_defaults`); `chat_title:<id>` names the chats for the panel.
 - Access is only through an SSH tunnel: compose publishes `127.0.0.1:8090` on the server. The panel

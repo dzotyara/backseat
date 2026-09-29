@@ -119,7 +119,8 @@ async def cmd_status(svc: Services, interaction: discord.Interaction) -> None:
         return
     # Discord waits only 3 seconds for an answer, OpenRouter may take longer.
     await interaction.response.defer(ephemeral=True, thinking=True)
-    chats = [(chat_id, f"Память <#{chat_id}>") for chat_id in svc.settings.allowed_chat_ids or [interaction.channel_id]]
+    allowed = (await svc.bot_config.runtime()).allowed_chat_ids
+    chats = [(chat_id, f"Память <#{chat_id}>") for chat_id in allowed or [interaction.channel_id]]
     text = await status_text(
         svc.me.username,
         chats,
@@ -191,7 +192,7 @@ async def _say_privately_after_defer(interaction: discord.Interaction, text: str
 
 async def cmd_digest(svc: Services, interaction: discord.Interaction) -> None:
     channel = interaction.channel
-    if channel is None or not channel_allowed(channel, svc.settings.allowed_chat_ids):
+    if channel is None or not channel_allowed(channel, (await svc.bot_config.runtime()).allowed_chat_ids):
         await _private(interaction, "Здесь я итоги не подвожу.")
         return
     chat_id = channel.id
