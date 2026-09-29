@@ -309,3 +309,8 @@ async def test_cloudflare_gets_only_the_fields_its_model_accepts(tmp_path: Path,
     maker = ImageMaker(storage, FakeLLM(), http=http, cloudflare=("acc", "tok", "@cf/flux"))  # type: ignore[arg-type]
     assert await maker.draw("a cat", await runtime(tmp_path, storage, image_fallbacks=False)) == JPEG
     assert bodies == [{"prompt": "a cat", "steps": 4}]
+
+
+def test_redraw_requests_are_drawing_requests() -> None:
+    for text in ("Так он мужчина, перерисовывай", "перерисуй", "дорисуй ему шляпу", "нарисуй кота"):
+        assert ImageMaker.looks_like_request(text), text

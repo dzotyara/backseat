@@ -54,3 +54,8 @@ def test_split_message() -> None:
     assert re.sub(r"\s", "", "".join(chunks)) == re.sub(r"\s", "", text)  # only whitespace at cuts is lost
     assert split_message("коротко", limit=500) == ["коротко"]
     assert split_message("x" * 1200, limit=500) == ["x" * 500, "x" * 500, "x" * 200]
+
+
+def test_a_copied_picture_mark_is_not_posted() -> None:
+    text = "Понял, батя, сейчас будет мужчина. [картинка: A cute anime man, black and white] Держи"
+    assert clean_reply(text) == "Понял, батя, сейчас будет мужчина. Держи"

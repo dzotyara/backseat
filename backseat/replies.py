@@ -23,6 +23,9 @@ class Action:
 SKIP = Action("skip")
 
 
+_PICTURE_MARK_RE = re.compile(r"\s*\[картинка[^\]]*\]", re.IGNORECASE)
+
+
 def clean_reply(text: str) -> str:
     """Strip what models add around a chat message: fences, an echoed REPLY line,
     transcript prefixes like "#123 12:34 Ты:", wrapping quotes."""
@@ -34,6 +37,8 @@ def clean_reply(text: str) -> str:
     if len(lines) > 1 and _PROTOCOL_LINE_RE.match(lines[0]):
         lines.pop(0)
     text = "\n".join(lines).strip()
+    # The chat model copies the «[картинка: prompt]» marks of the pictures it drew: never post them as text.
+    text = _PICTURE_MARK_RE.sub("", text).strip()
     text = _TRANSCRIPT_PREFIX_RE.sub("", text)
     text = _SPEAKER_PREFIX_RE.sub("", text)
     if len(text) >= 2 and text[0] + text[-1] in _QUOTE_PAIRS:

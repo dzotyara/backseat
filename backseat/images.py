@@ -27,7 +27,9 @@ log = logging.getLogger(__name__)
 
 # Only messages that look like a drawing request cost the planning call; the rest are answered as usual.
 REQUEST_RE = re.compile(
-    r"нарису|рисан|рисун|картин|изобраз|сгенер|нагенер|пикч|\bарт\b|draw|picture|image|generate", re.IGNORECASE
+    # "рису|рисов" also catches «перерисуй», «перерисовывай», «дорисуй»: «нарису» alone missed them.
+    r"рису|рисов|рисан|рисун|картин|изобраз|сгенер|нагенер|пикч|\bарт\b|draw|picture|image|generate",
+    re.IGNORECASE,
 )
 POLLINATIONS_URL = "https://image.pollinations.ai/prompt/{prompt}"  # anonymous: only the weak Sana
 POLLINATIONS_KEYED_URL = "https://gen.pollinations.ai/image/{prompt}"  # with a key: the models it allows
