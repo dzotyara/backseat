@@ -314,3 +314,26 @@ async def test_cloudflare_gets_only_the_fields_its_model_accepts(tmp_path: Path,
 def test_redraw_requests_are_drawing_requests() -> None:
     for text in ("Так он мужчина, перерисовывай", "перерисуй", "дорисуй ему шляпу", "нарисуй кота"):
         assert ImageMaker.looks_like_request(text), text
+
+
+async def test_a_refused_drawing_is_answered_with_the_refusal(tmp_path: Path, storage: Storage) -> None:
+    refusal = json.dumps({"draw": False, "refuse": "Такое рисовать не буду, давай что-нибудь добрее."})
+    llm, transport = FakeLLM(refusal), FakeTransport()
+    responder = make_responder(tmp_path, storage, llm, transport, ImageMaker(storage, llm))  # type: ignore[arg-type]
+    await storage.add_message(msg(5, "ботяра, нарисуй флаг и слона в говне", user_id=IVAN, author="Иван"))
+    responder.enqueue(CHAT, Incoming(5, IVAN, addressed=True, trivial=False))
+    await responder.process(CHAT)
+    assert [(s.text, getattr(s, "image", None)) for s in transport.sent] == [
+        ("Такое рисовать не буду, давай что-нибудь добрее.", None)
+    ]
+    await responder.shutdown()
+
+
+async def test_a_text_answer_to_a_drawing_request_may_not_promise_a_picture(tmp_path: Path, storage: Storage) -> None:
+    llm, transport = FakeLLM('{"draw": false}', "Картинка норм."), FakeTransport()
+    responder = make_responder(tmp_path, storage, llm, transport, ImageMaker(storage, llm))  # type: ignore[arg-type]
+    await storage.add_message(msg(5, "ботяра, как тебе эта картинка?", user_id=IVAN, author="Иван"))
+    responder.enqueue(CHAT, Incoming(5, IVAN, addressed=True, trivial=False))
+    await responder.process(CHAT)
+    assert "Не пиши «сейчас нарисую»" in llm.prompt_text()
+    await responder.shutdown()

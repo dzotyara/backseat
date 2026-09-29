@@ -44,6 +44,7 @@ class Drawing:
     prompt: str  # English, for the image model
     caption: str  # posted with the picture
     shape: str | None = None  # square | landscape | portrait when the request says so
+    refused: bool = False  # a drawing request the model will not draw: caption is its refusal
 
 
 def quota_renews_at(tz: ZoneInfo, now: datetime | None = None) -> str:
@@ -67,7 +68,12 @@ def parse_drawing(text: str) -> Drawing | None:
         data = json.loads(match.group(0)) if match else None
     except ValueError:
         return None
-    if not isinstance(data, dict) or data.get("draw") is not True:
+    if not isinstance(data, dict):
+        return None
+    refuse = data.get("refuse")
+    if data.get("draw") is not True:
+        if isinstance(refuse, str) and refuse.strip():
+            return Drawing("", refuse.strip()[:300], refused=True)
         return None
     prompt, caption = data.get("prompt"), data.get("caption")
     if not isinstance(prompt, str) or not prompt.strip():

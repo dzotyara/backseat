@@ -32,6 +32,7 @@ from backseat.prompts import (
     IMAGE_TASK,
     MODERATION_WORDS_RE,
     NO_MODERATION_NOTE,
+    NO_PICTURE_NOTE,
     REACT_OPTION,
     REACTION_EMOJIS,
     UNPROMPTED_TASK,
@@ -191,9 +192,11 @@ class Responder:
                 continue
             author = self._context.formatter.author(target)
             note = _moderation_note([target])
-            if self._wants_picture(target, runtime) and await self._draw(chat_id, messages, target, author, runtime):
-                self._freeze(state, target.user_id, runtime)
-                continue
+            if self._wants_picture(target, runtime):
+                if await self._draw(chat_id, messages, target, author, runtime):
+                    self._freeze(state, target.user_id, runtime)
+                    continue
+                note += NO_PICTURE_NOTE  # it looked like a drawing request but nothing was drawn
             prompt = await self._context.for_reply(
                 chat_id,
                 messages,
@@ -237,6 +240,9 @@ class Responder:
         if drawing is None:
             return False
         reply_to = target.message_id
+        if drawing.refused:
+            await self.send(chat_id, drawing.caption, reply_to=reply_to, notify=True)
+            return True
         if not await images.left_today(target.user_id, runtime):
             limit = IMAGE_LIMIT_REPLY.format(limit=runtime.images_per_user_per_day)
             await self._transport.send(chat_id, limit, reply_to=reply_to, notify=True)
