@@ -5,10 +5,10 @@ from contextlib import AbstractAsyncContextManager
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
-from aiogram.types import ReactionTypeEmoji, ReplyParameters
+from aiogram.types import BufferedInputFile, ReactionTypeEmoji, ReplyParameters
 from aiogram.utils.chat_action import ChatActionSender
 
-from backseat.transport import Sent
+from backseat.transport import Sent, picture_filename
 
 log = logging.getLogger(__name__)
 
@@ -27,6 +27,18 @@ class TelegramTransport:
             sent = await self._bot.send_message(chat_id, text, reply_parameters=reply)
         except TelegramAPIError:
             log.exception("chat=%s failed to send a message", chat_id)
+            return None
+        return Sent(sent.message_id, int(sent.date.timestamp()))
+
+    async def send_image(
+        self, chat_id: int, image: bytes, caption: str, *, reply_to: int | None = None, notify: bool = False
+    ) -> Sent | None:
+        reply = ReplyParameters(message_id=reply_to, allow_sending_without_reply=True) if reply_to else None
+        photo = BufferedInputFile(image, filename=picture_filename(image))
+        try:
+            sent = await self._bot.send_photo(chat_id, photo, caption=caption[:1024] or None, reply_parameters=reply)
+        except TelegramAPIError:
+            log.exception("chat=%s failed to send a picture", chat_id)
             return None
         return Sent(sent.message_id, int(sent.date.timestamp()))
 

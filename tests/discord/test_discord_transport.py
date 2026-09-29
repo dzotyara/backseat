@@ -26,6 +26,17 @@ async def test_answer_pings_only_the_author_it_replies_to() -> None:
     only_replied_user(call.allowed_mentions, notify=True)
 
 
+async def test_picture_goes_out_as_a_file_with_its_caption() -> None:
+    channel = FakeChannel(CHANNEL)
+    transport = DiscordTransport(FakeClient(cached=[channel]))  # type: ignore[arg-type]
+    sent = await transport.send_image(CHANNEL, b"\x89PNG...", "@everyone держи", reply_to=77, notify=True)
+    [call] = channel.sent
+    assert sent is not None and call.content == "@everyone держи"
+    assert call.file.filename == "picture.png"
+    assert call.reference.message_id == 77
+    only_replied_user(call.allowed_mentions, notify=True)
+
+
 async def test_plain_message_pings_nobody() -> None:
     channel = FakeChannel(CHANNEL)
     transport = DiscordTransport(FakeClient(cached=[channel]))  # type: ignore[arg-type]

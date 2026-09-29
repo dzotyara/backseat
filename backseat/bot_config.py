@@ -41,6 +41,10 @@ SETTINGS_FIELDS = (
     "focus_history_tokens",
     "summary_enabled",
     "system_template",
+    "images_enabled",
+    "images_per_user_per_day",
+    "paid_images_per_day",
+    "image_models",
 )
 
 
@@ -65,6 +69,10 @@ class Runtime:
     focus_history_tokens: int
     summary_enabled: bool
     system_template: str
+    images_enabled: bool
+    images_per_user_per_day: int  # 0 = no limit
+    paid_images_per_day: int  # 0 = never pay for a picture
+    image_models: list[str]
 
     @classmethod
     def from_settings(cls, settings: CoreSettings) -> Self:
@@ -126,6 +134,7 @@ def _text(value: object) -> str:
 
 MAX_TOKENS_RANGE = (16, 16_000)
 BUDGET_RANGE = (0, 200_000)
+IMAGES_RANGE = (0, 10_000)
 
 _CHECKS: dict[str, Callable[[object], Any]] = {
     "paused": _flag,
@@ -144,6 +153,10 @@ _CHECKS: dict[str, Callable[[object], Any]] = {
     "focus_history_tokens": _integer(*BUDGET_RANGE),
     "summary_enabled": _flag,
     "system_template": _text,
+    "images_enabled": _flag,
+    "images_per_user_per_day": _integer(*IMAGES_RANGE),
+    "paid_images_per_day": _integer(*IMAGES_RANGE),
+    "image_models": _models,
 }
 
 

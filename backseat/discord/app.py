@@ -29,6 +29,7 @@ from backseat.discord.moderation import Moderation
 from backseat.discord.settings import DiscordSettings
 from backseat.discord.transport import DiscordTransport
 from backseat.heartbeat import beat, remember_chat_title, run_heartbeat
+from backseat.images import ImageMaker
 from backseat.llm import LLMClient
 from backseat.render import LineFormatter
 from backseat.responder import Incoming, Responder
@@ -53,6 +54,7 @@ class BackseatClient(discord.Client):
         self.bot_config = BotConfig(storage, settings, platform=self.transport.platform)
         self.formatter = LineFormatter(ZoneInfo(settings.timezone), settings.focus_users)
         self.moderation = Moderation(storage, llm)
+        self.images = ImageMaker(storage, llm)
         self.summarizer = Summarizer(storage, llm, settings, self.formatter, bot_config=self.bot_config)
         self.services: Services | None = None  # set in setup_hook, once the bot knows who it is
         self._background: set[asyncio.Task[None]] = set()
@@ -74,6 +76,7 @@ class BackseatClient(discord.Client):
             bot_config=self.bot_config,
             me=me,
             after_batch=self.after_batch,
+            images=self.images,
         )
         # Always built and scheduled: /digest writes its posts, and the weekly switch lives in the web
         # panel, checked at posting time.
@@ -212,5 +215,6 @@ async def run(settings: DiscordSettings) -> None:
             await client.start(settings.discord_bot_token.get_secret_value())
     finally:
         await client.shutdown()
+        await client.images.aclose()
         await llm.aclose()
         await storage.close()

@@ -2,12 +2,13 @@
 only the author of the message being answered, and only when the core asks for it."""
 
 import contextlib
+import io
 import logging
 from collections.abc import AsyncIterator
 
 import discord
 
-from backseat.transport import Sent
+from backseat.transport import Sent, picture_filename
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +51,26 @@ class DiscordTransport:
             message = await channel.send(text, reference=reference, allowed_mentions=mentions)
         except discord.HTTPException as exc:
             log.warning("channel=%s send failed: %s", chat_id, exc)
+            return None
+        return Sent(message.id, int(message.created_at.timestamp()))
+
+    async def send_image(
+        self, chat_id: int, image: bytes, caption: str, *, reply_to: int | None = None, notify: bool = False
+    ) -> Sent | None:
+        channel = await self.channel(chat_id)
+        if channel is None:
+            return None
+        reference = None
+        if reply_to is not None:
+            reference = discord.MessageReference(message_id=reply_to, channel_id=chat_id, fail_if_not_exists=False)
+        mentions = discord.AllowedMentions(everyone=False, users=False, roles=False, replied_user=notify)
+        picture = discord.File(io.BytesIO(image), filename=picture_filename(image))
+        try:
+            message = await channel.send(
+                caption[: self.max_length] or None, file=picture, reference=reference, allowed_mentions=mentions
+            )
+        except discord.HTTPException as exc:
+            log.warning("channel=%s picture send failed: %s", chat_id, exc)
             return None
         return Sent(message.id, int(message.created_at.timestamp()))
 

@@ -18,11 +18,16 @@ from typing import Any
 from backseat.bot_config import BotConfig, Runtime
 from backseat.config import CoreSettings
 from backseat.context import ContextBuilder
+from backseat.images import ImageMaker
 from backseat.llm import Completion, LLMClient, LLMError
 from backseat.prompts import (
     ADDRESSED_TASK,
     FALLBACK_REPLIES,
     FREEZE_REPLY,
+    IMAGE_FAILED_REPLY,
+    IMAGE_LIMIT_REPLY,
+    IMAGE_QUEUE_REPLY,
+    IMAGE_TASK,
     REACT_OPTION,
     REACTION_EMOJIS,
     UNPROMPTED_TASK,
@@ -77,6 +82,7 @@ class Responder:
         me: BotIdentity,
         after_batch: Callable[[int], Awaitable[None]] | None = None,
         clock: Callable[[], float] = time.monotonic,
+        images: ImageMaker | None = None,  # None = the bot never draws
     ) -> None:
         self._transport = transport
         self._storage = storage
@@ -87,6 +93,7 @@ class Responder:
         self._me = me
         self._after_batch = after_batch
         self._clock = clock
+        self._images = images
         self._states: dict[int, _ChatState] = {}
         self._background: set[asyncio.Task[None]] = set()
 
@@ -173,6 +180,9 @@ class Responder:
                 await self._tell_frozen(chat_id, target, left)
                 continue
             author = self._context.formatter.author(target)
+            if self._wants_picture(target, runtime) and await self._draw(chat_id, messages, target, author, runtime):
+                self._freeze(state, target.user_id, runtime)
+                continue
             prompt = await self._context.for_reply(
                 chat_id,
                 messages,
@@ -192,6 +202,52 @@ class Responder:
             await self.send(chat_id, text, reply_to=target_id, notify=True)
             self._freeze(state, target.user_id, runtime)
             log.info("chat=%s answered message=%s", chat_id, target_id)
+
+    def _wants_picture(self, target: StoredMessage, runtime: Runtime) -> bool:
+        return self._images is not None and runtime.images_enabled and ImageMaker.looks_like_request(target.text)
+
+    async def _draw(
+        self, chat_id: int, messages: list[StoredMessage], target: StoredMessage, author: str, runtime: Runtime
+    ) -> bool:
+        """Answer a drawing request with a picture. False = it was no such request: answer with text."""
+        images = self._images
+        assert images is not None
+        prompt = await self._context.for_reply(
+            chat_id,
+            messages,
+            lambda ids: IMAGE_TASK.format(message_id=ids.short(target.message_id), author=author),
+        )
+        try:
+            async with self._transport.typing(chat_id):
+                drawing = await images.plan(prompt.messages, runtime)
+        except LLMError as exc:
+            log.warning("chat=%s drawing request not understood, every model failed: %s", chat_id, exc)
+            return False
+        if drawing is None:
+            return False
+        reply_to = target.message_id
+        if not await images.left_today(target.user_id, runtime):
+            limit = IMAGE_LIMIT_REPLY.format(limit=runtime.images_per_user_per_day)
+            await self._transport.send(chat_id, limit, reply_to=reply_to, notify=True)
+            return True
+
+        async def queued(position: int, seconds: int) -> None:
+            note = IMAGE_QUEUE_REPLY.format(position=position, seconds=seconds)
+            await self._transport.send(chat_id, note, reply_to=reply_to)
+
+        async with self._transport.typing(chat_id):
+            picture = await images.draw(drawing.prompt, runtime, on_queue=queued)
+        if picture is None:
+            await self._transport.send(chat_id, IMAGE_FAILED_REPLY, reply_to=reply_to, notify=True)
+            return True
+        sent = await self._transport.send_image(chat_id, picture, drawing.caption, reply_to=reply_to, notify=True)
+        if sent is not None:
+            # The model later sees what it drew as its own message, with the prompt it drew from.
+            await self.remember(chat_id, sent, f"[картинка: {drawing.prompt}] {drawing.caption}".strip(), reply_to)
+            await images.count_drawn(target.user_id)
+            self._state(chat_id).last_comment_at = self._clock()
+        log.info("chat=%s drew a picture for message=%s", chat_id, reply_to)
+        return True
 
     def _freeze(self, state: _ChatState, user_id: int, runtime: Runtime) -> None:
         state.frozen_until[user_id] = self._clock() + runtime.reply_freeze_seconds

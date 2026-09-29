@@ -1,5 +1,6 @@
 """OpenRouter chat-completions client that walks an ordered list of models until one answers."""
 
+import base64
 import logging
 import re
 import time
@@ -158,6 +159,39 @@ class LLMClient:
             cost=usage.get("cost"),
             finish_reason=choices[0].get("finish_reason"),
         )
+
+    async def generate_image(self, prompt: str, *, models: list[str]) -> bytes:
+        """A picture from the first of OpenRouter's image models that draws one. Paid: the caller
+        decides whether it may spend. LLMError if every model failed."""
+        failures = []
+        for model in models:
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "modalities": ["image", "text"],
+            }
+            try:
+                response = await self._http.post(
+                    f"{self._base_url}/chat/completions", json=payload, headers=self._headers, timeout=120
+                )
+                data = response.json()
+            except (httpx.HTTPError, ValueError) as exc:
+                failures.append(f"{model}: {exc!r}")
+                continue
+            images = ((data.get("choices") or [{}])[0].get("message") or {}).get("images") or []
+            url = ((images[0] if images else {}).get("image_url") or {}).get("url", "")
+            if response.status_code != 200 or not url.startswith("data:image/"):
+                failures.append(f"{model}: HTTP {response.status_code} {str(data.get('error') or '')[:200]}")
+                continue
+            usage = data.get("usage") or {}
+            log.info(
+                "Image model=%s cost=%s provider=%s",
+                data.get("model") or model,
+                usage.get("cost"),
+                data.get("provider"),
+            )
+            return base64.b64decode(url.partition(",")[2])
+        raise LLMError("; ".join(failures) or "no image models configured")
 
     async def key_info(self) -> dict[str, Any] | None:
         """Usage and free-tier counters of the API key (GET /key), or None if unavailable."""

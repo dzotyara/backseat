@@ -12,6 +12,7 @@ from backseat.bot_config import BotConfig
 from backseat.context import ContextBuilder
 from backseat.digest import WeeklyDigest
 from backseat.heartbeat import beat, remember_chat_title, run_heartbeat
+from backseat.images import ImageMaker
 from backseat.llm import LLMClient
 from backseat.render import LineFormatter
 from backseat.responder import Responder
@@ -43,6 +44,7 @@ async def run(settings: TelegramSettings) -> None:
     bot = Bot(settings.telegram_bot_token.get_secret_value())
     transport = TelegramTransport(bot)
     llm = LLMClient(settings)
+    images = ImageMaker(storage, llm)
     background: list[asyncio.Task[None]] = []
     responder: Responder | None = None
     try:
@@ -61,6 +63,7 @@ async def run(settings: TelegramSettings) -> None:
             bot_config=bot_config,
             me=me,
             after_batch=summarizer.maintain,
+            images=images,
         )
 
         dispatcher = Dispatcher()
@@ -83,6 +86,7 @@ async def run(settings: TelegramSettings) -> None:
         await asyncio.gather(*background, return_exceptions=True)
         if responder is not None:
             await responder.shutdown()
+        await images.aclose()
         await llm.aclose()
         await storage.close()
         await bot.session.close()

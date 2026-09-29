@@ -87,6 +87,13 @@ class CoreSettings(BaseSettings):
     # Empty = the built-in prompts.SYSTEM_TEMPLATE.
     system_template: str = ""
 
+    # Pictures on request («нарисуй…»): drawn for free by Pollinations, one at a time; the paid image
+    # models (OpenRouter) only as a fallback and at most PAID_IMAGES_PER_DAY a day (0 = never pay).
+    images_enabled: bool = True
+    images_per_user_per_day: int = 0  # 0 = no limit
+    paid_images_per_day: int = 0
+    image_models: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["openai/gpt-5-image-mini"])
+
     reactions_enabled: bool = True
     weekly_digest: bool = True
     digest_weekday: int = Field(default=6, ge=0, le=6)  # Monday=0 ... Sunday=6
@@ -95,7 +102,7 @@ class CoreSettings(BaseSettings):
 
     log_level: str = "INFO"
 
-    @field_validator("models", "providers", "bot_names", mode="before")
+    @field_validator("models", "providers", "bot_names", "image_models", mode="before")
     @classmethod
     def _parse_str_list(cls, value: Any) -> Any:
         return _split(value)

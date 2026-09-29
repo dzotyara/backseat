@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Self
 
-from backseat.bot_config import BUDGET_RANGE, MAX_TOKENS_RANGE, Runtime, parse_names
+from backseat.bot_config import BUDGET_RANGE, IMAGES_RANGE, MAX_TOKENS_RANGE, Runtime, parse_names
 from backseat.prompts import SYSTEM_PLACEHOLDERS
 from backseat.web.formatting import format_seconds, number
 
@@ -31,7 +31,7 @@ class FieldSpec:
     high: int = 0
 
 
-GROUPS = ("Где и для кого", "Модель", "Когда говорить", "Что бот помнит", "Системный промпт")
+GROUPS = ("Где и для кого", "Модель", "Когда говорить", "Что бот помнит", "Картинки", "Системный промпт")
 
 SPECS: tuple[FieldSpec, ...] = (
     FieldSpec(
@@ -151,6 +151,40 @@ SPECS: tuple[FieldSpec, ...] = (
         GROUPS[3],
         low=BUDGET_RANGE[0],
         high=BUDGET_RANGE[1],
+    ),
+    FieldSpec(
+        "images_enabled",
+        "flag",
+        "Рисовать картинки",
+        "«ботяра, нарисуй кота в танке» — бот рисует бесплатно через Pollinations, по одной картинке за раз "
+        "(остальные ждут в очереди). Платит бот только за текстовый запрос, ≈ $0.0003 за картинку.",
+        GROUPS[4],
+    ),
+    FieldSpec(
+        "images_per_user_per_day",
+        "integer",
+        "Картинок в день на человека",
+        "Сколько картинок один человек может заказать за сутки. 0 — без ограничений.",
+        GROUPS[4],
+        low=IMAGES_RANGE[0],
+        high=IMAGES_RANGE[1],
+    ),
+    FieldSpec(
+        "paid_images_per_day",
+        "integer",
+        "Платных картинок в день",
+        "Если бесплатная рисовалка не ответила, бот может нарисовать платной моделью (≈ $0.01 за картинку), "
+        "но не больше стольких раз в сутки на весь чат. 0 — никогда не платить: бот скажет «попробуй позже».",
+        GROUPS[4],
+        low=IMAGES_RANGE[0],
+        high=IMAGES_RANGE[1],
+    ),
+    FieldSpec(
+        "image_models",
+        "models",
+        "Платные модели картинок",
+        "По одной в строке, первая — основная. Работают только при платных картинках больше 0.",
+        GROUPS[4],
     ),
     FieldSpec(
         "system_template",

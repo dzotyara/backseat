@@ -26,7 +26,8 @@ pydantic-settings. User-facing docs are in README.md (Russian).
   `Transport` protocol every adapter implements), `prompts.py` (service prompts), `config.py`
   (`CoreSettings`), `commands.py` (what both bots' commands share: `/status`, reset words, a persona
   sent as a file), `logs.py` (the log format of every entry point).
-- Adapters: `backseat/telegram/` and `backseat/discord/` — settings with the token, a `Transport`,
+- Adapters: `backseat/telegram/` and `backseat/discord/` — settings with the token, a `Transport` (text,
+  pictures, reactions, typing),
   message parsing, commands, the app wiring. `backseat/web/` — the panel: `app.py` wires it,
   `security.py` (Host, CSRF and framing guard), `pages.py` (what every page shares: `Panel`, flash
   messages, error pages), `routes/` (one module per section), `bots.py` (a bot's database as the panel
@@ -65,7 +66,11 @@ pydantic-settings. User-facing docs are in README.md (Russian).
    hidden reasoning by default (`REASONING=off`). `PROVIDERS` is sent as OpenRouter's provider order
    with fallbacks: left alone, OpenRouter served the default model from hosts 6-8x pricier than the cheapest.
    Each call logs its model, tokens, cost, provider and cached tokens.
-7. Discord moderation (`discord/moderation.py`): an addressed message from `MODERATOR_IDS` that mentions
+7. Pictures (`images.py`): an addressed message that looks like a drawing request gets a planning call
+   (`prompts.IMAGE_TASK`, full context, JSON with an English prompt and a caption); Pollinations draws
+   it for free — one request at a time, ~16 s apart, or it answers 402 — and OpenRouter's image models
+   are a paid fallback within `PAID_IMAGES_PER_DAY`. Daily counters live in `meta`.
+8. Discord moderation (`discord/moderation.py`): an addressed message from `MODERATOR_IDS` that mentions
    nicks, roles or colours is parsed by the model into JSON actions (nick, give/take/create role,
    colour); the code resolves members by id from the recent chat authors and runs them. Nothing
    parseable = the usual answer.

@@ -129,6 +129,17 @@ class FakeTransport:
         )
         return Sent(self._last_id, int(time.time()))
 
+    async def send_image(
+        self, chat_id: int, image: bytes, caption: str, *, reply_to: int | None = None, notify: bool = False
+    ) -> Sent | None:
+        self._last_id += 1
+        self.sent.append(
+            SimpleNamespace(
+                chat_id=chat_id, message_id=self._last_id, text=caption, reply_to=reply_to, notify=notify, image=image
+            )
+        )
+        return Sent(self._last_id, int(time.time()))
+
     async def react(self, chat_id: int, message_id: int, emoji: str) -> bool:
         self.reactions.append(SimpleNamespace(chat_id=chat_id, message_id=message_id, emoji=emoji))
         return True
