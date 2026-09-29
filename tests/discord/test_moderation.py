@@ -8,6 +8,7 @@ import discord
 
 from backseat.bot_config import BotConfig
 from backseat.discord.moderation import Moderation, parse_color, parse_plan
+from backseat.prompts import SYSTEM_TEMPLATE
 from backseat.storage import Storage, StoredMessage
 from tests.discord.fakes import BOT_ID, CHANNEL, IVAN, OWNER, PETYA, FakeLLM, http_error, make_settings
 
@@ -78,16 +79,27 @@ class FakeGuild:
         return role
 
 
-def request(text: str, author: int = OWNER, guild: FakeGuild | None = None) -> Any:
+def request(text: str, author: int = OWNER, guild: FakeGuild | None = None, reply_to: int | None = None) -> Any:
     return SimpleNamespace(
         id=1,
         content=text,
         clean_content=text,
-        author=SimpleNamespace(id=author, display_name="Дзотяра"),
+        author=SimpleNamespace(id=author, name="dzotyara", display_name="Дзотяра"),
         mentions=[],
         channel=SimpleNamespace(id=CHANNEL),
         guild=guild,
+        reference=SimpleNamespace(message_id=reply_to) if reply_to else None,
     )
+
+
+class RecordingLLM(FakeLLM):
+    def __init__(self, *answers: str) -> None:
+        super().__init__(*answers)
+        self.prompts: list[list[dict[str, str]]] = []
+
+    async def complete(self, messages: list[dict[str, str]], **options: Any) -> Any:
+        self.prompts.append(messages)
+        return await super().complete(messages, **options)
 
 
 def plan(*actions: dict[str, Any], question: str | None = None) -> str:
@@ -234,3 +246,33 @@ async def test_mute_unmute_unban_at_once_and_moderators_are_safe(tmp_path: Path,
     assert lines[1].startswith("⚠️ Модераторов, владельца сервера")
     assert lines[2].startswith("⚠️ Модераторов, владельца сервера")
     assert petya.muted_for is None and guild.banned == []
+
+
+async def test_the_answer_to_a_question_is_read_with_the_request(tmp_path: Path, storage: Storage) -> None:
+    await storage.add_message(StoredMessage(CHANNEL, 5, IVAN, "умер в таркове", "мама", None, False, 2_000_000_000))
+    ivan = FakeMember(IVAN, "умер в таркове")
+    guild = FakeGuild([ivan], [])
+    llm = RecordingLLM(plan(question="Кому выдать роль?"), plan({"do": "give_role", "user": IVAN, "role": "Хранитель"}))
+    mod = Moderation(storage, llm)  # type: ignore[arg-type]
+    rt = await runtime(tmp_path, storage, [OWNER])
+    assert await mod.handle(request("ботяра, сделай ему роль Хранитель", guild=guild), rt) == "Кому выдать роль?"
+    answer = request("Умер в таркове", guild=guild)
+    assert mod.wants(answer, rt)  # no nick or role in it, and not addressed — still an answer
+    assert await mod.handle(answer, rt) == "✅ умер в таркове: роль «Хранитель» создана"
+    assert llm.prompts[1][1]["content"] == "ботяра, сделай ему роль Хранитель\nУточнение на твой вопрос: Умер в таркове"
+
+
+async def test_me_and_him_are_explained_to_the_model(tmp_path: Path, storage: Storage) -> None:
+    await storage.add_message(StoredMessage(CHANNEL, 7, IVAN, "умер в таркове", "роль дай", None, False, 2_000_000_000))
+    llm = RecordingLLM(plan())
+    mod = Moderation(storage, llm)  # type: ignore[arg-type]
+    await mod.handle(
+        request("ботяра, дай ему роль", guild=FakeGuild([], []), reply_to=7), await runtime(tmp_path, storage, [OWNER])
+    )
+    system = llm.prompts[0][0]["content"]
+    assert f"Просит: {OWNER} — Дзотяра (dzotyara) — «мне»" in system
+    assert f"ответил на сообщение от: {IVAN} — умер в таркове" in system
+
+
+def test_the_chat_model_never_claims_moderation() -> None:
+    assert "Никогда не пиши, что сделал или сейчас сделаешь" in SYSTEM_TEMPLATE

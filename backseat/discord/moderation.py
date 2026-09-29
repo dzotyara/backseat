@@ -37,6 +37,7 @@ PARSE_SYSTEM = """\
 Ты разбираешь просьбу модератора Discord-сервера (ники, роли, муты, кики, баны) и переводишь её в JSON. \
 Ничего не выдумывай: только то, о чём просят.
 
+Просит: {requester} — «мне», «себе», «меня» значит он.{replied}
 Участники (id — как их зовут в чате):
 {members}
 
@@ -97,16 +98,25 @@ class _Pending:
     until: float
 
 
+@dataclass(frozen=True, slots=True)
+class _Asked:
+    request: str  # the moderator's request the bot answered with a question
+    until: float
+
+
 class Moderation:
     def __init__(self, storage: Storage, llm: LLMClient, clock: Any = time.monotonic) -> None:
         self._storage = storage
         self._llm = llm
         self._clock = clock
         self._pending: dict[tuple[int, int], _Pending] = {}  # (channel, moderator) -> a ban/kick awaiting «да»
+        self._asked: dict[tuple[int, int], _Asked] = {}  # (channel, moderator) -> a request awaiting an answer
 
     def awaits_answer(self, message: discord.Message) -> bool:
-        pending = self._pending.get((message.channel.id, message.author.id))
-        return pending is not None and pending.until > self._clock()
+        """The moderator owes the bot an answer: «да» to a ban or kick, or who/what it asked about."""
+        key = (message.channel.id, message.author.id)
+        waiting = self._pending.get(key) or self._asked.get(key)
+        return waiting is not None and waiting.until > self._clock()
 
     def wants(self, message: discord.Message, runtime: Runtime) -> bool:
         """A moderator's message that looks like such a request, or the answer to «точно?»."""
@@ -128,12 +138,18 @@ class Moderation:
             if _NO_RE.match(message.content):
                 return "Ок, отменил."
             # Anything else: the confirmation is dropped and the message is read as a new request.
+        text = message.clean_content
+        asked = self._asked.pop(key, None)
+        if asked is not None and asked.until > self._clock():
+            # «Кому выдать роль?» — «Умер в таркове»: the answer only makes sense with the request.
+            text = f"{asked.request}\nУточнение на твой вопрос: {text}"
         try:
-            plan = await self._plan(message, guild, runtime)
+            plan = await self._plan(message, guild, runtime, text)
         except LLMError as exc:
             log.warning("moderation request %s not parsed: %s", message.id, exc)
             return "Не смог разобрать просьбу: нейросеть сейчас недоступна. Попробуй через минуту."
         if plan.question:
+            self._asked[key] = _Asked(text, self._clock() + CONFIRM_SECONDS)
             return plan.question
         if not plan.actions:
             return None
@@ -152,21 +168,39 @@ class Moderation:
         log.info("moderation by user=%s: %s", author, " | ".join(lines))
         return "\n".join(lines)
 
-    async def _plan(self, message: discord.Message, guild: discord.Guild, runtime: Runtime) -> Plan:
+    async def _plan(self, message: discord.Message, guild: discord.Guild, runtime: Runtime, text: str) -> Plan:
         members = await self._directory(message, guild)
         roles = [role.name for role in guild.roles if not role.is_default() and not role.managed]
+        replied = await self._replied_author(message, guild)
         system = PARSE_SYSTEM.format(
+            requester=f"{message.author.id} — {_names(message.author)}",
+            replied=(
+                f"\nОн ответил на сообщение от: {replied[0]} — {replied[1]} — «ему», «ей», «его» значит этот человек."
+                if replied
+                else ""
+            ),
             members="\n".join(f"{user_id} — {name}" for user_id, name in members.items()) or "(никого)",
             roles=", ".join(roles) or "(нет)",
         )
         completion = await self._llm.complete(
-            [{"role": "system", "content": system}, {"role": "user", "content": message.clean_content}],
+            [{"role": "system", "content": system}, {"role": "user", "content": text}],
             max_tokens=400,
             temperature=0.0,
             models=runtime.models,
             providers=runtime.providers,
         )
         return parse_plan(completion.text)
+
+    async def _replied_author(self, message: discord.Message, guild: discord.Guild) -> tuple[int, str] | None:
+        """Who wrote the message this request answers, unless it is the bot itself."""
+        reference = message.reference
+        if reference is None or reference.message_id is None:
+            return None
+        stored = await self._storage.get_message(message.channel.id, reference.message_id)
+        if stored is None or stored.is_bot:
+            return None
+        cached = guild.get_member(stored.user_id)
+        return stored.user_id, _names(cached) if cached is not None else stored.author
 
     async def _directory(self, message: discord.Message, guild: discord.Guild) -> dict[int, str]:
         """Who the model may mean: people mentioned, then those who wrote in the channel lately."""
