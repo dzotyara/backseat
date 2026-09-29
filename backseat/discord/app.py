@@ -174,7 +174,7 @@ class BackseatClient(discord.Client):
             return  # remember other bots' messages, never talk to them
         # Every @mention, name call and reply to the bot gets an answer — even a bare sticker reply.
         addressed = find_address(message, svc.me.id, await self.bot_config.name_pattern()) is not None
-        if addressed and await self._moderate(message):
+        if (addressed or self.moderation.awaits_answer(message)) and await self._moderate(message):
             return
         svc.responder.enqueue(message.channel.id, Incoming(message.id, user_id, addressed, is_trivial(message)))
 
@@ -183,7 +183,7 @@ class BackseatClient(discord.Client):
         svc = self.services
         assert svc is not None
         runtime = await self.bot_config.runtime()
-        if runtime.paused or not Moderation.wants(message, runtime):
+        if runtime.paused or not self.moderation.wants(message, runtime):
             return False
         async with self.transport.typing(message.channel.id):
             report = await self.moderation.handle(message, runtime)

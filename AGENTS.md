@@ -73,8 +73,9 @@ pydantic-settings. User-facing docs are in README.md (Russian).
    anonymous Pollinations (Sana, ~16 s apart or it answers 402), and OpenRouter's image models as a
    paid fallback within `PAID_IMAGES_PER_DAY`. Daily counters live in `meta`.
 8. Discord moderation (`discord/moderation.py`): an addressed message from `MODERATOR_IDS` that mentions
-   nicks, roles or colours is parsed by the model into JSON actions (nick, give/take/create role,
-   colour); the code resolves members by id from the recent chat authors and runs them. Nothing
+   nicks, roles, colours, mutes, kicks or bans is parsed by the model into JSON actions; the code resolves
+   members by id from the recent chat authors and runs them. A plan with a kick or a ban waits for the
+   moderator's «да» (2 minutes, in memory); moderators, the owner and the bot are never muted, kicked or banned. Nothing
    parseable = the usual answer.
 
 ## Web panel contract

@@ -1,4 +1,5 @@
 import json
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -8,7 +9,7 @@ import discord
 from backseat.bot_config import BotConfig
 from backseat.discord.moderation import Moderation, parse_color, parse_plan
 from backseat.storage import Storage, StoredMessage
-from tests.discord.fakes import CHANNEL, IVAN, OWNER, PETYA, FakeLLM, http_error, make_settings
+from tests.discord.fakes import BOT_ID, CHANNEL, IVAN, OWNER, PETYA, FakeLLM, http_error, make_settings
 
 
 class FakeRole:
@@ -29,6 +30,14 @@ class FakeMember:
         self.nick: str | None = None
         self.roles: list[FakeRole] = []
         self._refuse = refuse
+        self.muted_for: timedelta | None = None
+        self.kicked = False
+
+    async def timeout(self, until: timedelta | None, *, reason: str) -> None:
+        self.muted_for = until
+
+    async def kick(self, *, reason: str) -> None:
+        self.kicked = True
 
     async def edit(self, *, nick: str | None, reason: str) -> None:
         if self._refuse:
@@ -46,6 +55,16 @@ class FakeGuild:
     def __init__(self, members: list[FakeMember], roles: list[FakeRole]) -> None:
         self.members = {member.id: member for member in members}
         self.roles = [FakeRole("@everyone", default=True), *roles]
+        self.owner_id = 999
+        self.me = SimpleNamespace(id=BOT_ID)
+        self.banned: list[int] = []
+        self.unbanned: list[int] = []
+
+    async def ban(self, user: Any, *, reason: str, delete_message_seconds: int) -> None:
+        self.banned.append(user.id)
+
+    async def unban(self, user: Any, *, reason: str) -> None:
+        self.unbanned.append(user.id)
 
     def get_member(self, user_id: int) -> FakeMember | None:
         return self.members.get(user_id)
@@ -83,9 +102,11 @@ async def runtime(tmp_path: Path, storage: Storage, moderators: list[int]) -> An
 
 async def test_only_moderators_and_only_such_requests(tmp_path: Path, storage: Storage) -> None:
     rt = await runtime(tmp_path, storage, [OWNER])
-    assert Moderation.wants(request("ботяра, поменяй Ивокси ник на Антон"), rt)
-    assert not Moderation.wants(request("ботяра, как дела?"), rt)
-    assert not Moderation.wants(request("ботяра, поменяй Ивокси ник на Антон", author=PETYA), rt)
+    mod = Moderation(storage, FakeLLM())  # type: ignore[arg-type]
+    assert mod.wants(request("ботяра, поменяй Ивокси ник на Антон"), rt)
+    assert mod.wants(request("ботяра, забань Ивокси"), rt)
+    assert not mod.wants(request("ботяра, как дела?"), rt)
+    assert not mod.wants(request("ботяра, поменяй Ивокси ник на Антон", author=PETYA), rt)
 
 
 async def test_nick_new_coloured_role_and_the_report(tmp_path: Path, storage: Storage) -> None:
@@ -127,7 +148,7 @@ async def test_refusals_are_reported_per_action(tmp_path: Path, storage: Storage
             {"do": "nick", "user": PETYA, "nick": "Пётр"},
             {"do": "give_role", "user": 42, "role": "Морпех"},
             {"do": "color", "role": "Бот", "color": "#000001"},
-            {"do": "ban", "user": PETYA},
+            {"do": "explode", "user": PETYA},
         )
     )
     report = await Moderation(storage, llm).handle(  # type: ignore[arg-type]
@@ -137,7 +158,7 @@ async def test_refusals_are_reported_per_action(tmp_path: Path, storage: Storage
     assert lines[0].startswith("⚠️ Ник: Discord не дал прав")
     assert lines[1] == "⚠️ Такого участника на сервере нет"
     assert lines[2] == "⚠️ Роль «Бот» служебная, её не трогаю"
-    assert lines[3] == "⚠️ Не умею: ban"
+    assert lines[3] == "⚠️ Не умею: explode"
     assert [r.name for r in guild.roles] == ["@everyone", "Бот"]  # no «Морпех» for a missing member
 
 
@@ -157,3 +178,59 @@ def test_parsers() -> None:
     assert parse_plan("[]") == parse_plan("")
     assert parse_color("#78866b") == discord.Colour(0x78866B)
     assert parse_color("хаки") is None and parse_color(None) is None
+
+
+async def test_ban_waits_for_yes_and_no_cancels(tmp_path: Path, storage: Storage) -> None:
+    await storage.add_message(StoredMessage(CHANNEL, 5, IVAN, "Крутой ник", "мама", None, False, 2_000_000_000))
+    guild = FakeGuild([FakeMember(IVAN, "Крутой ник")], [])
+    now = [0.0]
+    ban = plan({"do": "ban", "user": IVAN})
+    mod = Moderation(storage, FakeLLM(ban, ban), clock=lambda: now[0])  # type: ignore[arg-type]
+    rt = await runtime(tmp_path, storage, [OWNER])
+
+    ask = await mod.handle(request("ботяра, забань Крутого", guild=guild), rt)
+    assert ask == f"Точно? забанить Крутой ник (id {IVAN}). Ответь «да» в течение 2 минут — или «нет»."
+    assert guild.banned == []
+    yes = request("Да, я хочу забанить его", guild=guild)
+    assert mod.wants(yes, rt) and mod.awaits_answer(yes)  # an answer, though it names no nick or role
+    assert await mod.handle(yes, rt) == "✅ Крутой ник: забанен"
+    assert guild.banned == [IVAN]
+    assert not mod.awaits_answer(yes)
+
+    await mod.handle(request("ботяра, забань Крутого", guild=guild), rt)
+    assert await mod.handle(request("нет", guild=guild), rt) == "Ок, отменил."
+    assert guild.banned == [IVAN]
+
+
+async def test_a_late_yes_does_nothing(tmp_path: Path, storage: Storage) -> None:
+    guild = FakeGuild([FakeMember(IVAN, "Крутой ник")], [])
+    now = [0.0]
+    mod = Moderation(storage, FakeLLM(plan({"do": "kick", "user": IVAN})), clock=lambda: now[0])  # type: ignore[arg-type]
+    rt = await runtime(tmp_path, storage, [OWNER])
+    await mod.handle(request("ботяра, выгони Крутого", guild=guild), rt)
+    now[0] += 121
+    late = request("да", guild=guild)
+    assert not mod.wants(late, rt)
+    assert guild.members[IVAN].kicked is False
+
+
+async def test_mute_unmute_unban_at_once_and_moderators_are_safe(tmp_path: Path, storage: Storage) -> None:
+    ivan, petya = FakeMember(IVAN, "Ivan"), FakeMember(PETYA, "Petya")
+    guild = FakeGuild([ivan, petya], [])
+    llm = FakeLLM(
+        plan({"do": "mute", "user": IVAN, "minutes": 60}, {"do": "unban", "user": 42}),
+        plan({"do": "unmute", "user": IVAN}, {"do": "mute", "user": PETYA}, {"do": "ban", "user": OWNER}),
+    )
+    mod = Moderation(storage, llm)  # type: ignore[arg-type]
+    rt = await runtime(tmp_path, storage, [OWNER, PETYA])
+    report = await mod.handle(request("ботяра, замуть Ивана на час и разбань 42", guild=guild), rt)
+    assert report == "✅ Ivan: мут на 60 мин\n✅ id 42: разбанен"
+    assert ivan.muted_for == timedelta(minutes=60) and guild.unbanned == [42]
+
+    ask = await mod.handle(request("ботяра, размуть Ивана, замуть Петю, забань себя", guild=guild), rt)
+    assert ask is not None and ask.startswith("Точно?")  # a ban in the plan: everything waits for «да»
+    lines = (await mod.handle(request("да", guild=guild), rt) or "").splitlines()
+    assert lines[0] == "✅ Ivan: мут снят"
+    assert lines[1].startswith("⚠️ Модераторов, владельца сервера")
+    assert lines[2].startswith("⚠️ Модераторов, владельца сервера")
+    assert petya.muted_for is None and guild.banned == []
