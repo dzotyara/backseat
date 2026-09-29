@@ -37,6 +37,12 @@
       <textarea id="f-{{ spec.name }}" name="{{ spec.name }}" class="mono" spellcheck="false"
         rows="{{ 18 if spec.kind == 'text' else 4 }}"
         {%- if error %} aria-invalid="true" aria-describedby="e-{{ spec.name }}"{% endif %}>{{ form.texts.get(spec.name, "") }}</textarea>
+      {% elif spec.kind == "choice" %}
+      <select id="f-{{ spec.name }}" name="{{ spec.name }}">
+        {% for value, label in spec.options %}
+        <option value="{{ value }}"{% if form.texts.get(spec.name) == value %} selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
       {% elif spec.kind in ("seconds", "integer") %}
       <input id="f-{{ spec.name }}" name="{{ spec.name }}" inputmode="decimal" class="short" autocomplete="off"
         value="{{ form.texts.get(spec.name, '') }}"

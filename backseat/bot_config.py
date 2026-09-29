@@ -43,6 +43,8 @@ SETTINGS_FIELDS = (
     "system_template",
     "images_enabled",
     "pollinations_models",
+    "image_shape",
+    "image_size",
     "images_per_user_per_day",
     "paid_images_per_day",
     "image_models",
@@ -72,6 +74,8 @@ class Runtime:
     system_template: str
     images_enabled: bool
     pollinations_models: list[str]  # with a Pollinations key: tried in order
+    image_shape: str  # square | landscape | portrait
+    image_size: int  # the long side, px
     images_per_user_per_day: int  # 0 = no limit
     paid_images_per_day: int  # 0 = never pay for a picture
     image_models: list[str]
@@ -128,6 +132,15 @@ def _integer(low: int, high: int) -> Callable[[object], int]:
     return check
 
 
+def _choice(*options: str) -> Callable[[object], str]:
+    def check(value: object) -> str:
+        if value not in options:
+            raise ValueError(f"expected one of: {', '.join(options)}")
+        return value  # type: ignore[return-value]
+
+    return check
+
+
 def _text(value: object) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError("expected non-empty text")
@@ -137,6 +150,8 @@ def _text(value: object) -> str:
 MAX_TOKENS_RANGE = (16, 16_000)
 BUDGET_RANGE = (0, 200_000)
 IMAGES_RANGE = (0, 10_000)
+IMAGE_SIZE_RANGE = (256, 1536)
+IMAGE_SHAPES = ("square", "landscape", "portrait")
 
 _CHECKS: dict[str, Callable[[object], Any]] = {
     "paused": _flag,
@@ -157,6 +172,8 @@ _CHECKS: dict[str, Callable[[object], Any]] = {
     "system_template": _text,
     "images_enabled": _flag,
     "pollinations_models": _words,
+    "image_shape": _choice(*IMAGE_SHAPES),
+    "image_size": _integer(*IMAGE_SIZE_RANGE),
     "images_per_user_per_day": _integer(*IMAGES_RANGE),
     "paid_images_per_day": _integer(*IMAGES_RANGE),
     "image_models": _models,

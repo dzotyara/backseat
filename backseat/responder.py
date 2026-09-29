@@ -236,7 +236,7 @@ class Responder:
             await self._transport.send(chat_id, note, reply_to=reply_to)
 
         async with self._transport.typing(chat_id):
-            picture = await images.draw(drawing.prompt, runtime, on_queue=queued)
+            picture = await images.draw(drawing.prompt, runtime, on_queue=queued, shape=drawing.shape)
         if picture is None:
             await self._transport.send(chat_id, IMAGE_FAILED_REPLY, reply_to=reply_to, notify=True)
             return True

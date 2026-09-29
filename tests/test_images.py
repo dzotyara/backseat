@@ -7,7 +7,7 @@ import httpx
 
 from backseat.bot_config import BotConfig, Runtime
 from backseat.context import ContextBuilder
-from backseat.images import ImageMaker, parse_drawing
+from backseat.images import ImageMaker, dimensions, parse_drawing
 from backseat.llm import LLMClient
 from backseat.render import LineFormatter
 from backseat.responder import Incoming, Responder
@@ -228,3 +228,37 @@ async def test_without_keys_only_the_anonymous_sana(tmp_path: Path, storage: Sto
     maker = ImageMaker(storage, FakeLLM(), http=http)  # type: ignore[arg-type]
     assert await maker.draw("a cat", await runtime(tmp_path, storage)) == JPEG
     assert calls == ["image.pollinations.ai"]
+
+
+async def test_shapes_other_than_square_skip_cloudflare(tmp_path: Path, storage: Storage) -> None:
+    http, calls = artists(cloudflare=[], keyed=[], anonymous=[])
+    sizes: list[tuple[str, str]] = []
+    original = http._transport.handle_async_request  # type: ignore[attr-defined]
+
+    async def spy(request: httpx.Request) -> httpx.Response:
+        if "width" in request.url.params:
+            sizes.append((request.url.params["width"], request.url.params["height"]))
+        return await original(request)
+
+    http._transport.handle_async_request = spy  # type: ignore[attr-defined]
+    maker = ImageMaker(
+        storage,
+        FakeLLM(),
+        http=http,
+        pollinations_key="sk-test",
+        cloudflare=("acc", "tok", "@cf/flux"),  # type: ignore[arg-type]
+    )
+    rt = await runtime(tmp_path, storage, image_shape="landscape")
+    assert await maker.draw("a city", rt) == JPEG  # the panel's default shape
+    assert await maker.draw("a phone wallpaper", rt, shape="portrait") == JPEG  # the request's shape wins
+    assert await maker.draw("an avatar", rt, shape="square") == JPEG
+    assert calls == ["gen.pollinations.ai:zimage", "gen.pollinations.ai:zimage", "api.cloudflare.com"]
+    assert sizes == [("1024", "576"), ("576", "1024")]
+
+
+def test_shape_from_the_plan_and_dimensions() -> None:
+    plan = parse_drawing('{"draw": true, "prompt": "x", "caption": "", "shape": "portrait"}')
+    assert plan is not None and plan.shape == "portrait"
+    assert parse_drawing('{"draw": true, "prompt": "x", "shape": "круг"}').shape is None  # type: ignore[union-attr]
+    assert dimensions("square", 768) == (768, 768)
+    assert dimensions("landscape", 1024) == (1024, 576)

@@ -39,6 +39,14 @@ _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 class Drawing:
     prompt: str  # English, for the image model
     caption: str  # posted with the picture
+    shape: str | None = None  # square | landscape | portrait when the request says so
+
+
+def dimensions(shape: str, size: int) -> tuple[int, int]:
+    """(width, height) for a shape and a long side, in multiples of 16 as image models like."""
+    short = max(16, round(size * 9 / 16 / 16) * 16)
+    size = max(16, round(size / 16) * 16)
+    return {"landscape": (size, short), "portrait": (short, size)}.get(shape, (size, size))
 
 
 def parse_drawing(text: str) -> Drawing | None:
@@ -53,7 +61,12 @@ def parse_drawing(text: str) -> Drawing | None:
     prompt, caption = data.get("prompt"), data.get("caption")
     if not isinstance(prompt, str) or not prompt.strip():
         return None
-    return Drawing(prompt.strip()[:1000], caption.strip()[:300] if isinstance(caption, str) else "")
+    shape = data.get("shape")
+    return Drawing(
+        prompt.strip()[:1000],
+        caption.strip()[:300] if isinstance(caption, str) else "",
+        shape if shape in ("square", "landscape", "portrait") else None,
+    )
 
 
 class ImageMaker:
@@ -114,7 +127,11 @@ class ImageMaker:
     # --- drawing ---
 
     async def draw(
-        self, prompt: str, runtime: Runtime, on_queue: Callable[[int, int], Awaitable[None]] | None = None
+        self,
+        prompt: str,
+        runtime: Runtime,
+        on_queue: Callable[[int, int], Awaitable[None]] | None = None,
+        shape: str | None = None,
     ) -> bytes | None:
         """The picture, or None if neither the free service nor an allowed paid model drew it.
         on_queue(position, seconds) is called once when the request has to wait its turn."""
@@ -128,11 +145,14 @@ class ImageMaker:
             if on_queue is not None and wait > 3:
                 await on_queue(position, round(wait))
             async with self._lock:
-                image = await self._workers_ai(prompt)
+                shape = shape or runtime.image_shape
+                size = dimensions(shape, runtime.image_size)
+                # Cloudflare's FLUX.1 Schnell takes no size: it draws only the 1024×1024 square.
+                image = await self._workers_ai(prompt) if shape == "square" else None
                 if image is None:
-                    image = await self._keyed(prompt, runtime.pollinations_models)
+                    image = await self._keyed(prompt, runtime.pollinations_models, size)
                 if image is None:
-                    image = await self._free(prompt)
+                    image = await self._free(prompt, size)
         finally:
             self._queued -= 1
         if image is not None:
@@ -178,14 +198,20 @@ class ImageMaker:
             log.warning("Cloudflare refused a picture: HTTP %s %s", response.status_code, errors)
         return None
 
-    async def _keyed(self, prompt: str, models: list[str]) -> bytes | None:
+    async def _keyed(self, prompt: str, models: list[str], size: tuple[int, int]) -> bytes | None:
         """The key's models in order; None without a key, or when every model failed (e.g. no pollen left)."""
         if not self._key:
             return None
         url = POLLINATIONS_KEYED_URL.format(prompt=urllib.parse.quote(prompt, safe=""))
         headers = {"Authorization": f"Bearer {self._key}"}
         for model in models:
-            params = {"model": model, "width": 1024, "height": 1024, "safe": "true", "seed": random.randrange(10**9)}
+            params = {
+                "model": model,
+                "width": size[0],
+                "height": size[1],
+                "safe": "true",
+                "seed": random.randrange(10**9),
+            }
             try:
                 response = await self._http.get(url, params=params, headers=headers)
             except httpx.HTTPError as exc:
@@ -197,22 +223,28 @@ class ImageMaker:
             log.warning("Pollinations %s refused: HTTP %s %.200s", model, response.status_code, response.text)
         return None
 
-    async def _free(self, prompt: str) -> bytes | None:
+    async def _free(self, prompt: str, size: tuple[int, int]) -> bytes | None:
         """Pollinations, with one retry after the pause it wants between requests. Call under the lock."""
         for attempt in range(2):
             wait = self._free_at - self._clock()
             if wait > 0:
                 await self._sleep(wait)
-            image = await self._pollinations(prompt)
+            image = await self._pollinations(prompt, size)
             self._free_at = self._clock() + self._gap
             if image is not None:
                 return image
             log.info("Pollinations refused a picture (attempt %d)", attempt + 1)
         return None
 
-    async def _pollinations(self, prompt: str) -> bytes | None:
+    async def _pollinations(self, prompt: str, size: tuple[int, int]) -> bytes | None:
         url = POLLINATIONS_URL.format(prompt=urllib.parse.quote(prompt, safe=""))
-        params = {"width": 1024, "height": 1024, "nologo": "true", "safe": "true", "seed": random.randrange(10**9)}
+        params = {
+            "width": size[0],
+            "height": size[1],
+            "nologo": "true",
+            "safe": "true",
+            "seed": random.randrange(10**9),
+        }
         try:
             response = await self._http.get(url, params=params)
         except httpx.HTTPError as exc:

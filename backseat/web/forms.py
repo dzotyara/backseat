@@ -7,7 +7,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Self
 
-from backseat.bot_config import BUDGET_RANGE, IMAGES_RANGE, MAX_TOKENS_RANGE, Runtime, parse_names
+from backseat.bot_config import (
+    BUDGET_RANGE,
+    IMAGE_SIZE_RANGE,
+    IMAGES_RANGE,
+    MAX_TOKENS_RANGE,
+    Runtime,
+    parse_names,
+)
 from backseat.prompts import SYSTEM_PLACEHOLDERS
 from backseat.web.formatting import format_seconds, number
 
@@ -22,13 +29,14 @@ class FieldSpec:
     """One Runtime field on the settings page."""
 
     name: str
-    kind: str  # flag | seconds | integer | models | words | ids | text
+    kind: str  # flag | seconds | integer | models | words | ids | text | choice
     label: str
     hint: str
     group: str
     platforms: tuple[str, ...] = ()  # the bots that have it; empty = both
     low: int = 0
     high: int = 0
+    options: tuple[tuple[str, str], ...] = ()  # (value, label) of a choice
 
 
 GROUPS = ("Где и для кого", "Модель", "Когда говорить", "Что бот помнит", "Картинки", "Системный промпт")
@@ -170,6 +178,25 @@ SPECS: tuple[FieldSpec, ...] = (
         GROUPS[4],
     ),
     FieldSpec(
+        "image_shape",
+        "choice",
+        "Форма картинок",
+        "Какой бот рисует картинку, если в просьбе не сказано иначе («нарисуй вертикально», «для обоев»). "
+        "Квадраты рисует бесплатный Cloudflare; горизонтальные и вертикальные — Pollinations по ключу.",
+        GROUPS[4],
+        options=(("square", "квадрат"), ("landscape", "горизонтальная 16:9"), ("portrait", "вертикальная 9:16")),
+    ),
+    FieldSpec(
+        "image_size",
+        "integer",
+        "Размер картинок, пикселей по длинной стороне",
+        "Для Pollinations; Cloudflare всегда рисует 1024×1024. Меньше — не дешевле: цена за картинку не зависит "
+        "от размера, а 512 в полный экран выглядит мыльно.",
+        GROUPS[4],
+        low=IMAGE_SIZE_RANGE[0],
+        high=IMAGE_SIZE_RANGE[1],
+    ),
+    FieldSpec(
         "images_per_user_per_day",
         "integer",
         "Картинок в день на человека",
@@ -242,7 +269,7 @@ def show_value(spec: FieldSpec, value: Any) -> str:
             return "\n".join(value)
         case "words" | "ids":
             return ", ".join(str(item) for item in value)
-        case "text":
+        case "text" | "choice":
             return value
     return ""
 
@@ -288,6 +315,11 @@ def _parse(spec: FieldSpec, raw: str) -> tuple[Any, str | None]:
                     return None, f"«{item}» — не ID: нужны только цифры (у групп Telegram — с минусом)."
                 ids.append(int(item))
             return list(dict.fromkeys(ids)), None
+        case "choice":
+            value = raw.strip()
+            if value not in {option for option, _ in spec.options}:
+                return None, "Выберите один из вариантов."
+            return value, None
         case "text":
             text = raw.strip()
             if not text:

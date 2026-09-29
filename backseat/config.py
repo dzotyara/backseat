@@ -100,6 +100,10 @@ class CoreSettings(BaseSettings):
     cloudflare_image_model: str = "@cf/black-forest-labs/flux-1-schnell"
     pollinations_models: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["zimage", "flux"])
     images_per_user_per_day: int = 0  # 0 = no limit
+    # square | landscape (16:9) | portrait (9:16), unless the request says otherwise; and the long side in px.
+    # Cloudflare's FLUX.1 Schnell draws only 1024×1024 squares: other shapes go to Pollinations.
+    image_shape: str = "square"
+    image_size: int = 1024
     paid_images_per_day: int = 0
     image_models: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["openai/gpt-5-image-mini"])
 

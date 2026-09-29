@@ -31,6 +31,8 @@ async def _settings_page(
         spec.name: (
             ("включено" if getattr(defaults, spec.name) else "выключено")
             if spec.kind == "flag"
+            else dict(spec.options).get(getattr(defaults, spec.name))
+            if spec.kind == "choice"
             else show_value(spec, getattr(defaults, spec.name)) or "пусто"
         )
         for spec in specs
