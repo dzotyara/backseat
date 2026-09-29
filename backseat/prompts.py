@@ -74,6 +74,12 @@ NO_MODERATION_NOTE = """
 сделать не можешь. Запрещено писать «сделал», «готово», «выдал», «сейчас выдам», «поменял» и подобное. \
 Скажи коротко, что такие просьбы выполняются только для модераторов — можно с шуткой."""
 
+# Any answer that is not about pictures, while the bot can draw: after an evening of «нарисуй…» in the chat
+# the model decided drawing was its job («я бот-художник», «рисую что попросят», «что нарисовать-то?»).
+NO_DRAWING_TALK_NOTE = """
+Отвечай на само это сообщение. Про картинки и рисование не говори и не предлагай, если в нём об этом \
+не спросили."""
+
 # A drawing request that ended up in a text answer: nothing is being drawn, so nothing may be promised.
 NO_PICTURE_NOTE = """
 Внимание: картинку в этом ответе ты не рисуешь и не нарисуешь. Не пиши «сейчас нарисую», «будет шедевр» \

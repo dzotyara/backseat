@@ -31,6 +31,7 @@ from backseat.prompts import (
     IMAGE_QUOTA_REPLY,
     IMAGE_TASK,
     MODERATION_WORDS_RE,
+    NO_DRAWING_TALK_NOTE,
     NO_MODERATION_NOTE,
     NO_PICTURE_NOTE,
     REACT_OPTION,
@@ -197,6 +198,8 @@ class Responder:
                     self._freeze(state, target.user_id, runtime)
                     continue
                 note += NO_PICTURE_NOTE  # it looked like a drawing request but nothing was drawn
+            elif self._images is not None and runtime.images_enabled:
+                note += NO_DRAWING_TALK_NOTE
             prompt = await self._context.for_reply(
                 chat_id,
                 messages,
@@ -305,6 +308,8 @@ class Responder:
             return
         task, emojis = _unprompted_task(runtime.reactions_enabled)
         task += _moderation_note(messages)
+        if self._images is not None and runtime.images_enabled:
+            task += NO_DRAWING_TALK_NOTE
         prompt = await self._context.for_reply(chat_id, messages, lambda ids: task)
         try:
             completion = await self._complete(prompt.messages, runtime)

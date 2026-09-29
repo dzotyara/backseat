@@ -337,3 +337,13 @@ async def test_a_text_answer_to_a_drawing_request_may_not_promise_a_picture(tmp_
     await responder.process(CHAT)
     assert "Не пиши «сейчас нарисую»" in llm.prompt_text()
     await responder.shutdown()
+
+
+async def test_other_answers_are_told_not_to_talk_about_drawing(tmp_path: Path, storage: Storage) -> None:
+    llm, transport = FakeLLM("Привет."), FakeTransport()
+    responder = make_responder(tmp_path, storage, llm, transport, ImageMaker(storage, llm))  # type: ignore[arg-type]
+    await storage.add_message(msg(5, "ботяра, меня помнишь?", user_id=IVAN, author="Иван"))
+    responder.enqueue(CHAT, Incoming(5, IVAN, addressed=True, trivial=False))
+    await responder.process(CHAT)
+    assert "Про картинки и рисование не говори" in llm.prompt_text()
+    await responder.shutdown()
