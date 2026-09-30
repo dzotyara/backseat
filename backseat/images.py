@@ -119,7 +119,12 @@ class ImageMaker:
     async def plan(self, messages: list[dict[str, str]], runtime: Runtime) -> Drawing | None:
         """Ask the chat model for a prompt and a caption. LLMError propagates."""
         completion = await self._llm.complete(
-            messages, max_tokens=400, temperature=0.7, models=runtime.models, providers=runtime.providers
+            messages,
+            max_tokens=400,
+            temperature=0.7,
+            models=runtime.models,
+            providers=runtime.providers,
+            purpose="picture_plan",
         )
         return parse_drawing(completion.text)
 

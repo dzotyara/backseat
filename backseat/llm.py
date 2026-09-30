@@ -4,15 +4,21 @@ import base64
 import logging
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
 from backseat.config import CoreSettings
+from backseat.storage import LLMCall
 
 log = logging.getLogger(__name__)
+
+# What a call was for, as the panel's spending page groups them.
+PURPOSES = ("answer", "comment", "precheck", "summary", "digest", "picture_plan", "picture", "moderation", "other")
+
+CallSink = Callable[[LLMCall], Awaitable[None]]
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
@@ -39,6 +45,8 @@ class Completion:
     completion_tokens: int | None = None
     cost: float | None = None
     finish_reason: str | None = None  # "length" means the answer hit max_tokens and was cut
+    provider: str | None = None
+    cached_tokens: int | None = None
 
 
 class LLMClient:
@@ -47,9 +55,11 @@ class LLMClient:
         settings: CoreSettings,
         http: httpx.AsyncClient | None = None,
         clock: Callable[[], float] = time.monotonic,
+        on_call: CallSink | None = None,
     ) -> None:
         self.models = list(settings.models)
         self.last_model: str | None = None
+        self._on_call = on_call  # every call that answered, e.g. Storage.add_llm_call for the panel
         self._max_tokens = settings.max_tokens
         self._reasoning = settings.reasoning
         self._providers = list(settings.providers)
@@ -71,8 +81,10 @@ class LLMClient:
         temperature: float | None = None,
         models: list[str] | None = None,
         providers: list[str] | None = None,
+        purpose: str = "other",
     ) -> Completion:
-        """Walk `models` (by default the configured ones) in order until one answers."""
+        """Walk `models` (by default the configured ones) in order until one answers. `purpose`
+        (one of PURPOSES) is what the spending page groups the call under."""
         models = self.models if models is None else models
         providers = self._providers if providers is None else providers
         now = self._clock()
@@ -80,6 +92,7 @@ class LLMClient:
         candidates = [m for m in models if self._skip_until.get(m, 0.0) <= now] or models
         failures = []
         for model in candidates:
+            started = time.perf_counter()
             try:
                 completion = await self._request(
                     model, messages, max_tokens or self._max_tokens, temperature, providers
@@ -91,8 +104,30 @@ class LLMClient:
                     self._skip_until[model] = self._clock() + exc.cooldown
                 continue
             self.last_model = model
+            await self._record(
+                LLMCall(
+                    at=int(time.time()),
+                    purpose=purpose,
+                    model=completion.model,
+                    provider=completion.provider,
+                    prompt_tokens=completion.prompt_tokens,
+                    cached_tokens=completion.cached_tokens,
+                    completion_tokens=completion.completion_tokens,
+                    cost=completion.cost,
+                    latency_ms=round((time.perf_counter() - started) * 1000),
+                )
+            )
             return completion
         raise LLMError("; ".join(failures) or "no models configured")
+
+    async def _record(self, call: LLMCall) -> None:
+        """Hand the call to the sink. A failed write costs a line in the spending page, not the answer."""
+        if self._on_call is None:
+            return
+        try:
+            await self._on_call(call)
+        except Exception:
+            log.warning("Could not record an LLM call", exc_info=True)
 
     async def _request(
         self,
@@ -142,6 +177,7 @@ class LLMClient:
             raise _ModelFailed(f"empty content (finish_reason={choices[0].get('finish_reason')})")
 
         usage = data.get("usage") or {}
+        cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens")
         log.info(
             "LLM model=%s prompt_tokens=%s completion_tokens=%s cost=%s provider=%s cached_tokens=%s",
             data.get("model") or model,
@@ -149,7 +185,7 @@ class LLMClient:
             usage.get("completion_tokens"),
             usage.get("cost"),
             data.get("provider"),
-            (usage.get("prompt_tokens_details") or {}).get("cached_tokens"),
+            cached,
         )
         return Completion(
             text=text,
@@ -158,6 +194,8 @@ class LLMClient:
             completion_tokens=usage.get("completion_tokens"),
             cost=usage.get("cost"),
             finish_reason=choices[0].get("finish_reason"),
+            provider=data.get("provider"),
+            cached_tokens=cached,
         )
 
     async def generate_image(self, prompt: str, *, models: list[str]) -> bytes:
@@ -165,6 +203,7 @@ class LLMClient:
         decides whether it may spend. LLMError if every model failed."""
         failures = []
         for model in models:
+            started = time.perf_counter()
             payload = {
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
@@ -189,6 +228,16 @@ class LLMClient:
                 data.get("model") or model,
                 usage.get("cost"),
                 data.get("provider"),
+            )
+            await self._record(
+                LLMCall(
+                    at=int(time.time()),
+                    purpose="picture",
+                    model=data.get("model") or model,
+                    provider=data.get("provider"),
+                    cost=usage.get("cost"),
+                    latency_ms=round((time.perf_counter() - started) * 1000),
+                )
             )
             return base64.b64decode(url.partition(",")[2])
         raise LLMError("; ".join(failures) or "no image models configured")

@@ -73,7 +73,7 @@ class WeeklyDigest:
         prompt = await self._context.for_digest(chat_id, since_ts)
         runtime = await self._bot_config.runtime()
         completion = await self._llm.complete(
-            prompt.messages, max_tokens=1500, models=runtime.models, providers=runtime.providers
+            prompt.messages, max_tokens=1500, models=runtime.models, providers=runtime.providers, purpose="digest"
         )
         return clean_reply(completion.text) or None
 

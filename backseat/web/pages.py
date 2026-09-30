@@ -22,7 +22,7 @@ from backseat import __version__
 from backseat.render import WEEKDAYS
 from backseat.web import bots
 from backseat.web.bots import Bot, BotSlot
-from backseat.web.formatting import ago, format_seconds, money, number, plural
+from backseat.web.formatting import ago, axis_money, format_seconds, money, number, percent, plural
 from backseat.web.spending import SpendingCache
 
 log = logging.getLogger(__name__)
@@ -70,6 +70,9 @@ def make_templates(slots: list[BotSlot], tz: ZoneInfo, clock: Callable[[], float
         money=money,
         number=number,
         seconds=format_seconds,
+        percent=percent,
+        axis_money=axis_money,
+        short_day=lambda day: f"{day:%d.%m}",
     )
     return templates
 
@@ -82,6 +85,7 @@ class Panel:
     templates: Jinja2Templates
     spending: SpendingCache
     clock: Callable[[], float]  # unix seconds; a fake one in tests
+    timezone: ZoneInfo  # the owner's days, for the spending chart
 
     def render(self, request: Request, template: str, status: int = 200, **context: Any) -> Response:
         flash = _pop_flash(request)

@@ -20,6 +20,12 @@
   --radius: 14px;
   --radius-sm: 9px;
   --mono: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
   color-scheme: light;
 }
 
@@ -41,6 +47,12 @@
     --danger: #f87171;
     --danger-soft: #341717;
     --shadow: none;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
     color-scheme: dark;
   }
 }
@@ -802,6 +814,137 @@ textarea:focus {
 
 .message-card p {
   margin: 12px 0 0;
+}
+
+/* --- spending --- */
+
+.chart-card .legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  border-radius: 3px;
+  vertical-align: baseline;
+}
+
+.swatch.series-1, .chart .series-1 { background: var(--series-1); fill: var(--series-1); }
+.swatch.series-2, .chart .series-2 { background: var(--series-2); fill: var(--series-2); }
+.swatch.series-3, .chart .series-3 { background: var(--series-3); fill: var(--series-3); }
+.swatch.series-4, .chart .series-4 { background: var(--series-4); fill: var(--series-4); }
+.swatch.series-5, .chart .series-5 { background: var(--series-5); fill: var(--series-5); }
+.swatch.series-6, .chart .series-6 { background: var(--series-6); fill: var(--series-6); }
+
+.chart {
+  margin: 0;
+}
+
+.chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.chart .grid-line {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.chart .axis-line {
+  stroke: var(--muted);
+  stroke-width: 1;
+}
+
+.chart .axis-label {
+  fill: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart .hit {
+  fill: transparent;
+}
+
+.chart .bar:hover .hit {
+  fill: var(--surface-2);
+}
+
+.table-view {
+  margin-top: 12px;
+}
+
+.table-view summary {
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+.table-wrap table {
+  width: 100%;
+  margin-top: 8px;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.table-wrap th,
+.table-wrap td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.table-wrap th:first-child,
+.table-wrap td:first-child {
+  text-align: left;
+}
+
+.table-wrap th {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+/* --- moderation log --- */
+
+.journal {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.journal-entry {
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.journal-request {
+  margin: 4px 0 0;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.journal-result {
+  margin-top: 4px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 480px) {

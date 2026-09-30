@@ -7,6 +7,7 @@ import pytest
 
 from backseat.config import CoreSettings
 from backseat.llm import LLMClient, LLMError
+from backseat.storage import LLMCall
 from tests.conftest import make_settings
 
 PROMPT = [{"role": "user", "content": "привет"}]
@@ -153,3 +154,46 @@ async def test_key_info(settings: CoreSettings) -> None:
     assert await client.key_info() == data
     broken = make_client(settings, lambda request: httpx.Response(401, text="nope"))
     assert await broken.key_info() is None
+
+
+async def test_every_answered_call_is_recorded_with_its_purpose(settings: CoreSettings) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if model_of(request) == "paid/model":
+            return httpx.Response(429, text="slow down")
+        return httpx.Response(
+            200,
+            json={
+                "model": "free/model:free",
+                "provider": "Relace",
+                "choices": [{"message": {"content": "да"}, "finish_reason": "stop"}],
+                "usage": {
+                    "prompt_tokens": 1000,
+                    "completion_tokens": 1,
+                    "cost": 0.00002,
+                    "prompt_tokens_details": {"cached_tokens": 768},
+                },
+            },
+        )
+
+    calls: list[LLMCall] = []
+
+    async def sink(call: LLMCall) -> None:
+        calls.append(call)
+
+    client = LLMClient(settings, http=httpx.AsyncClient(transport=httpx.MockTransport(handler)), on_call=sink)
+    completion = await client.complete(PROMPT, purpose="precheck")
+    assert (completion.provider, completion.cached_tokens) == ("Relace", 768)
+    [call] = calls  # the failed model is not a call that cost anything
+    assert (call.purpose, call.model, call.provider) == ("precheck", "free/model:free", "Relace")
+    assert (call.prompt_tokens, call.cached_tokens, call.completion_tokens, call.cost) == (1000, 768, 1, 0.00002)
+    assert call.latency_ms is not None and call.latency_ms >= 0
+
+
+async def test_a_broken_sink_does_not_lose_the_answer(settings: CoreSettings) -> None:
+    async def sink(call: LLMCall) -> None:
+        raise RuntimeError("database is locked")
+
+    client = LLMClient(
+        settings, http=httpx.AsyncClient(transport=httpx.MockTransport(lambda request: ok("привет"))), on_call=sink
+    )
+    assert (await client.complete(PROMPT)).text == "привет"

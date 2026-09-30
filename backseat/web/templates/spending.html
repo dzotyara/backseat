@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block title %}Расходы{% endblock %}
+{% block content %}
+{% set chart = report.chart %}
+<div class="page-head">
+  <h1>Расходы</h1>
+  <p class="muted">Каждый вызов нейросети обоими ботами: сколько стоил, для чего и какой хостинг ответил.
+    Бесплатные картинки Cloudflare сюда не попадают — они ничего не стоят.</p>
+</div>
+
+{% for problem in problems %}<p class="note note-error">{{ problem }}</p>{% endfor %}
+
+<nav class="tabs" aria-label="Период">
+  {% for period in periods %}
+  <a href="/spending?days={{ period }}"{% if period == report.days %} aria-current="page"{% endif %}>{{ period }} дней</a>
+  {% endfor %}
+</nav>
+
+<section class="card" aria-labelledby="totals">
+  <div class="card-head"><h2 id="totals">За {{ report.days }} {{ report.days|plural("день", "дня", "дней") }}</h2></div>
+  <dl class="stats">
+    <div class="stat"><dt>Потрачено</dt><dd>{{ report.total.cost|money }}</dd></div>
+    <div class="stat"><dt>В среднем за день</dt><dd>{{ report.per_day|money }}</dd></div>
+    <div class="stat"><dt>Вызовов</dt><dd>{{ report.total.calls|number }}</dd></div>
+    <div class="stat">
+      <dt>Из кэша</dt>
+      <dd>{{ report.total.cache_share|percent if report.total.cache_share is not none else "—" }}</dd>
+    </div>
+  </dl>
+  {% if report.first_call_at is none %}
+  <p class="hint">За этот период вызовов нет. Боты записывают каждый вызов с версии 2.2 — график начнёт
+    заполняться после первого ответа.</p>
+  {% elif report.active_days < report.days %}
+  <p class="hint">Учёт ведётся с {{ report.first_call_at|when }}: среднее считается по
+    {{ report.active_days }} {{ report.active_days|plural("дню", "дням", "дням") }}.</p>
+  {% endif %}
+</section>
+
+<section class="card chart-card" aria-labelledby="by-day">
+  <div class="card-head"><h2 id="by-day">По дням</h2></div>
+  {% if report.groups %}
+  <ul class="legend" aria-label="Цвета графика">
+    {% for key, title, slot, tally in report.groups %}
+    <li><span class="swatch series-{{ slot }}" aria-hidden="true"></span>{{ title }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  <figure class="chart">
+    <svg viewBox="0 0 {{ chart.width }} {{ chart.height }}" role="img"
+         aria-label="Расходы по дням за {{ report.days }} дней, всего {{ report.total.cost|money }}">
+      {% for tick in chart.ticks %}
+      <line class="grid-line" x1="{{ chart.plot_left }}" x2="{{ chart.plot_right }}" y1="{{ tick.y }}" y2="{{ tick.y }}"></line>
+      <text class="axis-label" x="{{ chart.plot_left - 8 }}" y="{{ tick.y + 4 }}" text-anchor="end">{{ tick.value|axis_money }}</text>
+      {% endfor %}
+      {% for bar in chart.bars %}
+      <g class="bar">
+        <title>{{ bar.day|short_day }}: {{ bar.total.cost|money }}, {{ bar.total.calls }} {{ bar.total.calls|plural("вызов", "вызова", "вызовов") }}
+{%- for key, title, _ in groups %}{% if key in bar.by_group %}
+{{ title }}: {{ bar.by_group[key]|money }}{% endif %}{% endfor %}</title>
+        <rect class="hit" x="{{ bar.x }}" y="{{ chart.plot_top }}" width="{{ bar.width }}" height="{{ chart.plot_bottom - chart.plot_top }}"></rect>
+        {% for segment in bar.segments %}
+        <rect class="series-{{ segment.series }}" x="{{ bar.x }}" y="{{ segment.y }}" width="{{ bar.width }}" height="{{ segment.height }}" rx="2"></rect>
+        {% endfor %}
+      </g>
+      {% endfor %}
+      <line class="axis-line" x1="{{ chart.plot_left }}" x2="{{ chart.plot_right }}" y1="{{ chart.plot_bottom }}" y2="{{ chart.plot_bottom }}"></line>
+      {% for bar in chart.labels %}
+      <text class="axis-label" x="{{ bar.x + bar.width / 2 }}" y="{{ chart.plot_bottom + 18 }}" text-anchor="middle">{{ bar.day|short_day }}</text>
+      {% endfor %}
+    </svg>
+  </figure>
+  <details class="table-view">
+    <summary>Таблица по дням</summary>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">День</th><th scope="col">Вызовов</th><th scope="col">Стоимость</th></tr></thead>
+        <tbody>
+          {% for bar in chart.bars|reverse if bar.total.calls %}
+          <tr><td>{{ bar.day|short_day }}</td><td>{{ bar.total.calls|number }}</td><td>{{ bar.total.cost|money }}</td></tr>
+          {% else %}
+          <tr><td colspan="3" class="muted">Вызовов нет</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+</section>
+
+<section class="card" aria-labelledby="by-purpose">
+    <div class="card-head"><h2 id="by-purpose">На что</h2></div>
+    {% if report.groups %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">Для чего</th><th scope="col">Вызовов</th><th scope="col">Стоимость</th><th scope="col">Доля</th></tr></thead>
+        <tbody>
+          {% for key, title, slot, tally in report.groups %}
+          <tr>
+            <td><span class="swatch series-{{ slot }}" aria-hidden="true"></span>{{ title }}</td>
+            <td>{{ tally.calls|number }}</td>
+            <td>{{ tally.cost|money }}</td>
+            <td>{{ (tally.cost / report.total.cost)|percent if report.total.cost else "—" }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}<p class="muted">Вызовов нет.</p>{% endif %}
+  </section>
+
+  <section class="card" aria-labelledby="by-host">
+    <div class="card-head"><h2 id="by-host">Хостинги</h2></div>
+    {% if report.providers %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">Хостинг</th><th scope="col">Вызовов</th><th scope="col">Ответ, с</th><th scope="col">Из кэша</th><th scope="col">Стоимость</th></tr></thead>
+        <tbody>
+          {% for name, tally in report.providers %}
+          <tr>
+            <td>{{ name }}</td>
+            <td>{{ tally.calls|number }}</td>
+            <td>{{ "%.1f"|format(tally.average_seconds) if tally.average_seconds is not none else "—" }}</td>
+            <td>{{ tally.cache_share|percent if tally.cache_share is not none else "—" }}</td>
+            <td>{{ tally.cost|money }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="hint">Порядок хостингов задаётся в настройках бота. Время — от запроса до полного ответа.</p>
+    {% else %}<p class="muted">Вызовов нет.</p>{% endif %}
+  </section>
+
+<div class="grid">
+  <section class="card" aria-labelledby="by-bot">
+    <div class="card-head"><h2 id="by-bot">По ботам</h2></div>
+    {% if report.bots %}
+    <dl class="stats">
+      {% for name, tally in report.bots %}
+      <div class="stat"><dt>{{ name }}</dt><dd>{{ tally.cost|money }}</dd></div>
+      {% endfor %}
+    </dl>
+    {% else %}<p class="muted">Вызовов нет.</p>{% endif %}
+  </section>
+
+  <section class="card" aria-labelledby="key">
+    <div class="card-head"><h2 id="key">Ключ OpenRouter</h2></div>
+    {% if spending.problem %}
+    <p class="muted">{{ spending.problem }}</p>
+    {% else %}
+    <dl class="stats">
+      <div class="stat"><dt>Сегодня</dt><dd>{{ spending.usage_daily|money if spending.usage_daily is not none else "—" }}</dd></div>
+      <div class="stat"><dt>За месяц</dt><dd>{{ spending.usage_monthly|money if spending.usage_monthly is not none else "—" }}</dd></div>
+    </dl>
+    <p class="hint">Так считает сам OpenRouter, по всему ключу. Сутки у него — по UTC, поэтому «сегодня» может
+      не совпадать с графиком.</p>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

@@ -1,4 +1,4 @@
-from backseat.storage import Storage
+from backseat.storage import LLMCall, ModerationEntry, Storage
 from tests.conftest import BASE_TS, CHAT, IVAN, msg
 
 
@@ -72,3 +72,16 @@ async def test_what_the_panel_reads(storage: Storage) -> None:
     for key, value in {"chat_title:-1001": "Чат", "chat_titles": "не то", "heartbeat": "1"}.items():
         await storage.set_meta(key, value)
     assert await storage.meta_with_prefix("chat_title:") == {"-1001": "Чат"}
+
+
+async def test_llm_calls_and_moderation_log(storage: Storage) -> None:
+    await storage.add_llm_call(LLMCall(BASE_TS, "answer", "m", "Relace", 100, 80, 5, 0.001, 900))
+    await storage.add_llm_call(LLMCall(BASE_TS + 60, "precheck", "m"))
+    assert [call.purpose for call in await storage.llm_calls_since(BASE_TS)] == ["answer", "precheck"]
+    assert [call.purpose for call in await storage.llm_calls_since(BASE_TS + 1)] == ["precheck"]
+    first = ModerationEntry(BASE_TS, CHAT, IVAN, "Иван", "забань Васю", "✅ Вася: забанен")
+    second = ModerationEntry(BASE_TS, CHAT, IVAN, "Иван", "размуть Васю", "✅ Вася: мут снят")
+    await storage.add_moderation(first)
+    await storage.add_moderation(second)
+    assert await storage.latest_moderation(5) == [second, first]  # the newest first, even within a second
+    assert await storage.latest_moderation(1) == [second]

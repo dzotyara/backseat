@@ -13,6 +13,9 @@
   <a href="/bots/{{ state.slot.slug }}/persona"{% if tab == "persona" %} aria-current="page"{% endif %}>Характер</a>
   <a href="/bots/{{ state.slot.slug }}/settings"{% if tab == "settings" %} aria-current="page"{% endif %}>Настройки</a>
   <a href="/bots/{{ state.slot.slug }}/memory"{% if tab == "memory" %} aria-current="page"{% endif %}>Память</a>
+  {% if state.slot.slug == "discord" %}
+  <a href="/bots/{{ state.slot.slug }}/moderation"{% if tab == "moderation" %} aria-current="page"{% endif %}>Модерация</a>
+  {% endif %}
 </nav>
 {% block page %}{% endblock %}
 {% endblock %}

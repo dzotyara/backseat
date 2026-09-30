@@ -1,4 +1,5 @@
-"""SQLite storage: every chat message, the rolling summary and per-chat settings."""
+"""SQLite storage: every chat message, the rolling summary, per-chat settings, and what the panel
+reports — model calls with their cost and the moderation log."""
 
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -40,6 +41,29 @@ CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS llm_calls (
+    at                INTEGER NOT NULL,
+    purpose           TEXT    NOT NULL,
+    model             TEXT    NOT NULL,
+    provider          TEXT,
+    prompt_tokens     INTEGER,
+    cached_tokens     INTEGER,
+    completion_tokens INTEGER,
+    cost              REAL,
+    latency_ms        INTEGER
+);
+CREATE INDEX IF NOT EXISTS llm_calls_by_time ON llm_calls (at);
+
+CREATE TABLE IF NOT EXISTS moderation_log (
+    at           INTEGER NOT NULL,
+    chat_id      INTEGER NOT NULL,
+    moderator_id INTEGER NOT NULL,
+    moderator    TEXT    NOT NULL,
+    request      TEXT    NOT NULL,
+    result       TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS moderation_log_by_time ON moderation_log (at);
 """
 
 _COLUMNS = "chat_id, message_id, user_id, author, text, reply_to, is_bot, created_at"
@@ -67,6 +91,35 @@ class Summary:
     text: str
     upto_message_id: int
     updated_at: int
+
+
+@dataclass(frozen=True, slots=True)
+class LLMCall:
+    """One paid-or-free OpenRouter call that answered, for the panel's spending page."""
+
+    at: int  # unix seconds
+    purpose: str  # llm.PURPOSES
+    model: str
+    provider: str | None = None
+    prompt_tokens: int | None = None
+    cached_tokens: int | None = None
+    completion_tokens: int | None = None
+    cost: float | None = None  # dollars
+    latency_ms: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ModerationEntry:
+    at: int
+    chat_id: int
+    moderator_id: int
+    moderator: str
+    request: str
+    result: str  # the report the bot posted, one line per action
+
+
+_LLM_CALL_COLUMNS = "at, purpose, model, provider, prompt_tokens, cached_tokens, completion_tokens, cost, latency_ms"
+_MODERATION_COLUMNS = "at, chat_id, moderator_id, moderator, request, result"
 
 
 def _row_to_message(row: aiosqlite.Row) -> StoredMessage:
@@ -283,3 +336,43 @@ class Storage:
             (key, value),
         )
         await self.db.commit()
+
+    # --- what the panel reports: model calls and moderation ---
+
+    async def add_llm_call(self, call: LLMCall) -> None:
+        await self.db.execute(
+            f"INSERT INTO llm_calls ({_LLM_CALL_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                call.at,
+                call.purpose,
+                call.model,
+                call.provider,
+                call.prompt_tokens,
+                call.cached_tokens,
+                call.completion_tokens,
+                call.cost,
+                call.latency_ms,
+            ),
+        )
+        await self.db.commit()
+
+    async def llm_calls_since(self, since_ts: int) -> list[LLMCall]:
+        """Calls at or after since_ts, oldest first."""
+        async with self.db.execute(
+            f"SELECT {_LLM_CALL_COLUMNS} FROM llm_calls WHERE at >= ? ORDER BY at", (since_ts,)
+        ) as cursor:
+            return [LLMCall(*row) for row in await cursor.fetchall()]
+
+    async def add_moderation(self, entry: ModerationEntry) -> None:
+        await self.db.execute(
+            f"INSERT INTO moderation_log ({_MODERATION_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?)",
+            (entry.at, entry.chat_id, entry.moderator_id, entry.moderator, entry.request, entry.result),
+        )
+        await self.db.commit()
+
+    async def latest_moderation(self, limit: int) -> list[ModerationEntry]:
+        """The `limit` newest entries, the newest first."""
+        async with self.db.execute(
+            f"SELECT {_MODERATION_COLUMNS} FROM moderation_log ORDER BY at DESC, rowid DESC LIMIT ?", (limit,)
+        ) as cursor:
+            return [ModerationEntry(*row) for row in await cursor.fetchall()]

@@ -18,6 +18,15 @@ def money(value: float) -> str:
     return f"${value:.2f}" if value == 0 or value >= 1 else f"${value:.4f}"
 
 
+def axis_money(value: float) -> str:
+    """$0, $0.01, $0.025 — an axis label needs no trailing zeros."""
+    return "$" + (f"{value:.4f}".rstrip("0").rstrip(".") or "0")
+
+
+def percent(share: float) -> str:
+    return f"{share:.0%}" if share >= 0.01 or share == 0 else "<1%"
+
+
 def format_seconds(value: float) -> str:
     return str(int(value)) if value.is_integer() else str(value)
 

@@ -1,0 +1,27 @@
+{% extends "bot.html" %}
+{% block title %}Модерация · {{ state.slot.title }}{% endblock %}
+{% block page %}
+<section class="card">
+  <div class="card-head">
+    <h2>Журнал модерации</h2>
+    {% if entries %}<span class="muted">последние {{ entries|length }}</span>{% endif %}
+  </div>
+  {% if not entries %}
+  <p class="muted">Пока пусто. Здесь появится каждая просьба модератора, которую бот выполнил или которую
+    отменили, — ники, роли, муты, кики и баны.</p>
+  {% else %}
+  <ol class="journal">
+    {% for entry in entries %}
+    <li class="journal-entry">
+      <div class="message-head">
+        <span class="author">{{ entry.moderator }}</span>
+        <span class="muted">{{ entry.at|when }} · {{ chats.get(entry.chat_id, "канал " ~ entry.chat_id) }}</span>
+      </div>
+      <p class="journal-request">{{ entry.request }}</p>
+      <div class="journal-result">{{ entry.result }}</div>
+    </li>
+    {% endfor %}
+  </ol>
+  {% endif %}
+</section>
+{% endblock %}

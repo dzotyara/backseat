@@ -1,5 +1,6 @@
-"""The panel's pages by section: the overview, then each bot's persona, behaviour and memory."""
+"""The panel's pages by section: the overview and spending, then each bot's persona,
+behaviour, memory and moderation log."""
 
-from backseat.web.routes import behaviour, dashboard, memory, persona
+from backseat.web.routes import behaviour, dashboard, memory, moderation, persona, spending
 
-ROUTERS = (dashboard.router, persona.router, behaviour.router, memory.router)
+ROUTERS = (dashboard.router, spending.router, persona.router, behaviour.router, memory.router, moderation.router)

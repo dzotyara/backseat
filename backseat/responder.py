@@ -169,10 +169,14 @@ class Responder:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def _complete(self, messages: list[dict[str, str]], runtime: Runtime, **options: Any) -> Completion:
+    async def _complete(
+        self, messages: list[dict[str, str]], runtime: Runtime, purpose: str, **options: Any
+    ) -> Completion:
         # The panel's model order, hosts and answer length.
         options.setdefault("max_tokens", runtime.max_tokens)
-        return await self._llm.complete(messages, models=runtime.models, providers=runtime.providers, **options)
+        return await self._llm.complete(
+            messages, models=runtime.models, providers=runtime.providers, purpose=purpose, **options
+        )
 
     # --- addressed: always answer ---
 
@@ -210,7 +214,7 @@ class Responder:
             text = ""
             async with self._transport.typing(chat_id):
                 try:
-                    completion = await self._complete(prompt.messages, runtime)
+                    completion = await self._complete(prompt.messages, runtime, "answer")
                     text = clean_reply(completion.text)
                 except LLMError as exc:
                     log.error("chat=%s every model failed for an addressed message: %s", chat_id, exc)
@@ -312,7 +316,7 @@ class Responder:
             task += NO_DRAWING_TALK_NOTE
         prompt = await self._context.for_reply(chat_id, messages, lambda ids: task)
         try:
-            completion = await self._complete(prompt.messages, runtime)
+            completion = await self._complete(prompt.messages, runtime, "comment")
         except LLMError as exc:
             log.warning("chat=%s unprompted comment skipped, every model failed: %s", chat_id, exc)
             return
@@ -331,7 +335,7 @@ class Responder:
         """The cheap first look: a few recent lines, one word back. In a busy chat most batches end here."""
         prompt = await self._context.for_precheck(chat_id, messages)
         try:
-            completion = await self._complete(prompt.messages, runtime, max_tokens=5, temperature=0.0)
+            completion = await self._complete(prompt.messages, runtime, "precheck", max_tokens=5, temperature=0.0)
         except LLMError as exc:
             log.warning("chat=%s precheck skipped, every model failed: %s", chat_id, exc)
             return False

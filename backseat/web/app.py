@@ -37,6 +37,7 @@ def create_app(
         templates=pages.make_templates(list(slots.values()), ZoneInfo(settings.timezone), clock),
         spending=SpendingCache(settings.openrouter_base_url, settings.openrouter_api_key, openrouter_transport, clock),
         clock=clock,
+        timezone=ZoneInfo(settings.timezone),
     )
     app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
     app.middleware("http")(security.local_only(security.allowed_hosts(settings.web_host)))

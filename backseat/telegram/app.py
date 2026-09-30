@@ -57,7 +57,7 @@ async def run(settings: TelegramSettings) -> None:
     await storage.connect()
     bot = Bot(settings.telegram_bot_token.get_secret_value())
     transport = TelegramTransport(bot)
-    llm = LLMClient(settings)
+    llm = LLMClient(settings, on_call=storage.add_llm_call)
     images = ImageMaker(
         storage,
         llm,

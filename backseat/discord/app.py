@@ -222,7 +222,7 @@ class BackseatClient(discord.Client):
 async def run(settings: DiscordSettings) -> None:
     storage = Storage(settings.db_path)
     await storage.connect()
-    llm = LLMClient(settings)
+    llm = LLMClient(settings, on_call=storage.add_llm_call)
     client = BackseatClient(settings, storage, llm)
     loop = asyncio.get_running_loop()
     # `docker stop` sends SIGTERM: disconnect cleanly so the cleanup below runs. Windows has no

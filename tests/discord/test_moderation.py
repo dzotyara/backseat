@@ -276,3 +276,20 @@ async def test_me_and_him_are_explained_to_the_model(tmp_path: Path, storage: St
 
 def test_the_chat_model_never_claims_moderation() -> None:
     assert "Никогда не пиши, что сделал или сейчас сделаешь" in SYSTEM_TEMPLATE
+
+
+async def test_done_and_cancelled_requests_go_to_the_journal(tmp_path: Path, storage: Storage) -> None:
+    await storage.add_message(StoredMessage(CHANNEL, 5, IVAN, "Крутой ник", "мама", None, False, 2_000_000_000))
+    guild = FakeGuild([FakeMember(IVAN, "Крутой ник")], [])
+    ban, nick = plan({"do": "ban", "user": IVAN}), plan({"do": "nick", "user": IVAN, "nick": "Антон"})
+    mod = Moderation(storage, FakeLLM(nick, ban))  # type: ignore[arg-type]
+    rt = await runtime(tmp_path, storage, [OWNER])
+
+    await mod.handle(request("ботяра, ник Крутому — Антон", guild=guild), rt)
+    await mod.handle(request("ботяра, забань Крутого", guild=guild), rt)
+    await mod.handle(request("нет", guild=guild), rt)
+    cancelled, done = await storage.latest_moderation(10)
+    assert (done.request, done.result) == ("ботяра, ник Крутому — Антон", "✅ Крутой ник: ник «Антон»")
+    assert done.moderator_id == OWNER and done.chat_id == CHANNEL
+    assert cancelled.request == "ботяра, забань Крутого"
+    assert cancelled.result == f"❌ отменено: забанить Крутой ник (id {IVAN})"

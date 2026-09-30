@@ -69,6 +69,7 @@ class Summarizer:
             temperature=0.2,
             models=runtime.models,
             providers=runtime.providers,
+            purpose="summary",
         )
         text = completion.text.strip()
         if completion.finish_reason == "length":

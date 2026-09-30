@@ -85,7 +85,8 @@
           <dd>{{ spending.usage_monthly|money if spending.usage_monthly is not none else "—" }}</dd>
         </div>
       </dl>
-      <p class="hint">По ключу OPENROUTER_API_KEY — сумма по всем ботам, которые им пользуются. Обновляется раз в минуту.</p>
+      <p class="hint">По ключу OPENROUTER_API_KEY — сумма по всем ботам, которые им пользуются. Обновляется раз в минуту.
+        <a href="/spending">График по дням</a></p>
     {% endif %}
   </section>
 </div>

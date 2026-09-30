@@ -15,7 +15,7 @@ import discord
 
 from backseat.bot_config import Runtime
 from backseat.llm import LLMClient, LLMError
-from backseat.storage import Storage
+from backseat.storage import ModerationEntry, Storage
 
 log = logging.getLogger(__name__)
 
@@ -93,6 +93,7 @@ def parse_color(value: object) -> discord.Colour | None:
 
 @dataclass(frozen=True, slots=True)
 class _Pending:
+    request: str  # for the moderation log
     actions: list[dict[str, Any]]
     names: dict[int, str]
     until: float
@@ -134,8 +135,10 @@ class Moderation:
         pending = self._pending.pop(key, None)
         if pending is not None and pending.until > self._clock():
             if _YES_RE.match(message.content):
-                return await self._run_all(guild, pending.actions, reason, protected, message.author.id)
+                return await self._run_all(message, pending.request, pending.actions, reason, protected)
             if _NO_RE.match(message.content):
+                what = "; ".join(_describe_plan(action, pending.names) for action in pending.actions)
+                await self._journal(message, pending.request, f"❌ отменено: {what}")
                 return "Ок, отменил."
             # Anything else: the confirmation is dropped and the message is read as a new request.
         text = message.clean_content
@@ -155,18 +158,37 @@ class Moderation:
             return None
         risky = [action for action in plan.actions if action["do"] in CONFIRM]
         if not risky:
-            return await self._run_all(guild, plan.actions, reason, protected, message.author.id)
+            return await self._run_all(message, text, plan.actions, reason, protected)
         names = await self._directory(message, guild)
-        self._pending[key] = _Pending(plan.actions, names, self._clock() + CONFIRM_SECONDS)
+        self._pending[key] = _Pending(text, plan.actions, names, self._clock() + CONFIRM_SECONDS)
         what = "; ".join(_describe_plan(action, names) for action in plan.actions)
         return f"Точно? {what}. Ответь «да» в течение {CONFIRM_SECONDS // 60} минут — или «нет»."
 
     async def _run_all(
-        self, guild: discord.Guild, actions: list[dict[str, Any]], reason: str, protected: set[int], author: int
+        self, message: discord.Message, request: str, actions: list[dict[str, Any]], reason: str, protected: set[int]
     ) -> str:
+        guild = message.guild
+        assert guild is not None
         lines = [await self._run(guild, action, reason, protected) for action in actions]
-        log.info("moderation by user=%s: %s", author, " | ".join(lines))
-        return "\n".join(lines)
+        log.info("moderation by user=%s: %s", message.author.id, " | ".join(lines))
+        report = "\n".join(lines)
+        await self._journal(message, request, report)
+        return report
+
+    async def _journal(self, message: discord.Message, request: str, result: str) -> None:
+        """The panel's moderation log. A failed write must not undo the report."""
+        entry = ModerationEntry(
+            at=int(time.time()),
+            chat_id=message.channel.id,
+            moderator_id=message.author.id,
+            moderator=_names(message.author),
+            request=request,
+            result=result,
+        )
+        try:
+            await self._storage.add_moderation(entry)
+        except Exception:
+            log.warning("Could not write the moderation log", exc_info=True)
 
     async def _plan(self, message: discord.Message, guild: discord.Guild, runtime: Runtime, text: str) -> Plan:
         members = await self._directory(message, guild)
@@ -188,6 +210,7 @@ class Moderation:
             temperature=0.0,
             models=runtime.models,
             providers=runtime.providers,
+            purpose="moderation",
         )
         return parse_plan(completion.text)
 

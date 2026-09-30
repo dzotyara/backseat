@@ -30,7 +30,8 @@ pydantic-settings. User-facing docs are in README.md (Russian).
   pictures, reactions, typing),
   message parsing, commands, the app wiring. `backseat/web/` — the panel: `app.py` wires it,
   `security.py` (Host, CSRF and framing guard), `pages.py` (what every page shares: `Panel`, flash
-  messages, error pages), `routes/` (one module per section), `bots.py` (a bot's database as the panel
+  messages, error pages), `routes/` (one module per section), `usage.py` (the spending page's numbers
+  and chart geometry: a server-drawn SVG, no JavaScript), `bots.py` (a bot's database as the panel
   sees it), `forms.py`.
 - Each bot has its own SQLite file (`data/backseat.db`, `data/discord.db`); the panel opens both.
 
@@ -65,7 +66,9 @@ pydantic-settings. User-facing docs are in README.md (Russian).
 6. `llm.py` walks the model list in order, cools a model down after 402/403/404/429, and disables
    hidden reasoning by default (`REASONING=off`). `PROVIDERS` is sent as OpenRouter's provider order
    with fallbacks: left alone, OpenRouter served the default model from hosts 6-8x pricier than the cheapest.
-   Each call logs its model, tokens, cost, provider and cached tokens.
+   Each call logs its model, tokens, cost, provider and cached tokens, and is stored in `llm_calls`
+   with its purpose (`llm.PURPOSES`) and latency for the panel's spending page; pass `purpose=` on
+   every new `complete()` call.
 7. Pictures (`images.py`): an addressed message that looks like a drawing request gets a planning call
    (`prompts.IMAGE_TASK`, full context, JSON with an English prompt and a caption). Then, one picture
    at a time: Cloudflare Workers AI (`CLOUDFLARE_*`, free daily allocation; skipped for the rest of the
@@ -76,7 +79,7 @@ pydantic-settings. User-facing docs are in README.md (Russian).
    nicks, roles, colours, mutes, kicks or bans is parsed by the model into JSON actions; the code resolves
    members by id from the recent chat authors and runs them. A plan with a kick or a ban waits for the
    moderator's «да» (2 minutes, in memory); moderators, the owner and the bot are never muted, kicked or banned. Nothing
-   parseable = the usual answer.
+   parseable = the usual answer. What was done or cancelled goes to `moderation_log` (the panel's «Модерация» tab).
 
 ## Web panel contract
 

@@ -14,6 +14,7 @@
       <a class="brand" href="/" aria-label="Бэксит — обзор"><span class="brand-mark" aria-hidden="true">Б</span><span class="brand-text">Бэксит</span></a>
       <nav class="topnav" aria-label="Разделы">
         <a href="/"{% if nav == "home" %} aria-current="page"{% endif %}>Обзор</a>
+        <a href="/spending"{% if nav == "spending" %} aria-current="page"{% endif %}>Расходы</a>
         {% for item in slots %}
         <a href="/bots/{{ item.slug }}/persona"{% if nav == item.slug %} aria-current="page"{% endif %}>{{ item.title }}</a>
         {% endfor %}
