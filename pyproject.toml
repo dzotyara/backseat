@@ -1,6 +1,6 @@
 [project]
 name = "backseat"
-version = "2.1.0"
+version = "2.2.0"
 description = "Group-chat bots for Telegram and Discord with long-term memory"
 license = "MIT"
 requires-python = ">=3.12"
